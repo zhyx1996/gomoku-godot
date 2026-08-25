@@ -1,0 +1,62 @@
+# Gomoku（五子棋）
+
+基于 **Godot 4.7** 实现的五子棋游戏，支持人人对战与人机对战（NNUE 神经网络引擎），内置 Freestyle / Standard / Renju（连珠）三种规则，Renju 规则下完整实现黑方禁手（三三、四四、长连）判定。
+
+## 特性
+
+- 🎮 人人对战 / 人机对战（可调难度，AI 思考可中断）
+- 🧠 强 AI：内置 [Rapfi](https://github.com/dhbloo/rapfi) NNUE 引擎（Piskvork 协议，自动选择 SSE/AVX2/AVX512 指令集）
+- 📏 规则：Freestyle（无禁手）/ Standard（黑长连禁）/ Renju（黑三三、四四、长连禁手）
+- ✨ 制胜棋型识别：活四、双冲四、四三、双活三自动高亮提示
+- 🎨 三套主题：星夜（默认）、木质、浅色；落子动画、胜利彩带粒子
+- 🌐 支持 Web 导出（SharedArrayBuffer 跨域隔离）
+
+## 目录结构
+
+```
+├── gomoku.gd          # 游戏主逻辑（棋型检测、禁手、UI、对战流程）
+├── classic_ai.gd      # 本地经典 AI（棋型打分 + VCT/VCF 前瞻）
+├── rapfi_ai.gd        # Rapfi 引擎封装（Piskvork 协议子进程通信）
+├── node_2d.tscn       # 主场景
+├── engine/            # Rapfi 引擎可执行文件与权重（第三方组件，见其 README）
+├── fonts/             # 思源黑体（Noto Sans CJK SC，OFL 许可）
+├── gomoku-c/          # 附：早期 C 语言控制台版五子棋（源码）
+├── tests/             # headless 回归测试
+│   └── threat_test.gd #   制胜棋型/禁手检测 14 用例
+└── addons/godot_mcp/  # Godot MCP 调试插件（可选，不影响游戏）
+```
+
+## 运行
+
+用 Godot 4.7+ 打开本项目，或：
+
+```bash
+godot --path .
+```
+
+## 运行测试
+
+```bash
+godot --headless --script tests/threat_test.gd --path .
+```
+
+14 个用例覆盖活三/跳活三/活四/冲四/双四/四三/双三及 Renju 禁手回落行为。
+
+## Web 导出
+
+```bash
+godot --headless --export-release "Web"
+```
+
+导出配置见 `export_presets.cfg`（输出至 `build/web/`，已排除 engine/tests/screenshots 等非运行时资源）。Web 版需要跨域隔离头（COOP/COEP）以启用多线程。
+
+## 第三方组件
+
+| 组件 | 许可 | 来源 |
+| --- | --- | --- |
+| [Rapfi](https://github.com/dhbloo/rapfi) 引擎 | GPL-3.0 | dhbloo/rapfi |
+| Rapfi 神经网络权重 | CC0-1.0 | [dhbloo/rapfi-networks](https://github.com/dhbloo/rapfi-networks) |
+| [Noto Sans CJK SC](https://fonts.google.com/noto) 字体 | SIL OFL 1.1 | Google Noto |
+| godot_mcp 插件 | 见 addons/godot_mcp/LICENSE | Coding-Solo/GodotMCP |
+
+详见 `engine/README.md`。

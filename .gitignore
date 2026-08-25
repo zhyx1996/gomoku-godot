@@ -1,0 +1,17 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Export artifacts (reproducible via: godot --headless --export-release "Web")
+build/
+
+# Local tooling & session artifacts
+.gdmcp/
+.playwright-cli/
+tests/*.log
+
+# Development-only screenshots (not referenced by any code; excluded from export as well)
+screenshots/
+
+# Compiled binaries (sources kept in gomoku-c/)
+gomoku-c/*.exe
