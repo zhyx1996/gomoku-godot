@@ -127,6 +127,7 @@ var _ai_section_label: Label = null       # 设置里的「AI 执子」分区标
 var _ai_section_row: HBoxContainer = null # 设置里的 AI 执子按钮行
 var _stop_pending := false                # 已请求停止 AI（停止后撤销玩家一手）
 var _turn_generation := 0                 # 对局代数（新局/返回标题时递增，防陈旧协程落子）
+var _mode_confirm: ConfirmationDialog = null  # 对局中切换模式的放弃确认框
 
 # ---- 分析状态（引擎回调更新）----
 var _realtime_best := Vector2i(-1, -1)  # 思考中引擎当前最佳候选点
@@ -393,7 +394,7 @@ func _build_title_screen() -> void:
 	var diff_row := HBoxContainer.new()
 	diff_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_child(diff_row)
-	var difficulty_btn := _make_small_button(_difficulty_label())
+	var difficulty_btn := _make_small_button(_difficulty_label() + " ▾")
 	difficulty_btn.pressed.connect(func(): _show_difficulty_menu(difficulty_btn))
 	diff_row.add_child(difficulty_btn)
 	_title_difficulty_button = difficulty_btn
@@ -402,7 +403,7 @@ func _build_title_screen() -> void:
 	pvp.pressed.connect(func(): _start_game(GameMode.PVP))
 	box.add_child(pvp)
 
-	var eve := _make_menu_button("！？机机？！对战")
+	var eve := _make_menu_button("机机对战（古法编程 vs 推理引擎）")
 	eve.pressed.connect(func(): _start_game(GameMode.EVE))
 	eve.visible = _dlc_unlocked
 	box.add_child(eve)
@@ -486,11 +487,7 @@ func _return_to_title() -> void:
 		_difficulty_menu = null
 		_difficulty_anchor = null
 	_build_title_screen()
-	if _dlc_unlocked:
-		if _subtitle_label != null:
-			_subtitle_label.text = "已解锁隐藏难度：古法编程"
-		if _subtitle_note != null:
-			_subtitle_note.text = "（初学C语言时写的）"
+	# 解锁提示只在解锁瞬间以 toast 展示；标题副标语保持默认，不再常驻覆盖
 	queue_redraw()
 
 
@@ -513,7 +510,7 @@ func _on_title_secret_click() -> void:
 ## 更新标题界面难度按钮显示。
 func _update_title_difficulty() -> void:
 	if _title_difficulty_button != null:
-		_title_difficulty_button.text = _difficulty_label()
+		_title_difficulty_button.text = _difficulty_label() + " ▾"
 
 
 ## 难度文字（含古法编程隐藏档）。
@@ -823,11 +820,32 @@ func _build_settings_popup() -> void:
 	board_size_button.pressed.connect(_on_board_size_pressed)
 	layout.add_child(board_size_button)
 
-	# 引擎
+	# AI 执子（机机对战下隐藏，双方本就是 AI）
+	_ai_section_label = _section_label("AI 执子")
+	layout.add_child(_ai_section_label)
+	_ai_section_row = HBoxContainer.new()
+	_ai_section_row.add_theme_constant_override("separation", 8)
+	layout.add_child(_ai_section_row)
+	ai_black_button = _make_button()
+	ai_black_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ai_black_button.pressed.connect(_on_ai_black_pressed)
+	_ai_section_row.add_child(ai_black_button)
+	ai_white_button = _make_button()
+	ai_white_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ai_white_button.pressed.connect(_on_ai_white_pressed)
+	_ai_section_row.add_child(ai_white_button)
+
+	# 引擎（常用）
 	layout.add_child(_section_label("引擎"))
 	think_time_button = _make_button()
 	think_time_button.pressed.connect(_on_think_time_pressed)
 	layout.add_child(think_time_button)
+	strength_button = _make_button()
+	strength_button.pressed.connect(_on_strength_pressed)
+	layout.add_child(strength_button)
+
+	# 引擎高级（一般无需调整）
+	layout.add_child(_section_label("引擎高级"))
 	cand_range_button = _make_button()
 	cand_range_button.pressed.connect(_on_cand_range_pressed)
 	layout.add_child(cand_range_button)
@@ -837,9 +855,6 @@ func _build_settings_popup() -> void:
 	hash_button = _make_button()
 	hash_button.pressed.connect(_on_hash_pressed)
 	layout.add_child(hash_button)
-	strength_button = _make_button()
-	strength_button.pressed.connect(_on_strength_pressed)
-	layout.add_child(strength_button)
 	pondering_button = _make_button()
 	pondering_button.pressed.connect(_on_pondering_pressed)
 	layout.add_child(pondering_button)
@@ -866,21 +881,6 @@ func _build_settings_popup() -> void:
 	theme_button = _make_button()
 	theme_button.pressed.connect(_on_theme_pressed)
 	layout.add_child(theme_button)
-
-	# AI 执子（机机对战下隐藏，双方本就是 AI）
-	_ai_section_label = _section_label("AI 执子")
-	layout.add_child(_ai_section_label)
-	_ai_section_row = HBoxContainer.new()
-	_ai_section_row.add_theme_constant_override("separation", 8)
-	layout.add_child(_ai_section_row)
-	ai_black_button = _make_button()
-	ai_black_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ai_black_button.pressed.connect(_on_ai_black_pressed)
-	_ai_section_row.add_child(ai_black_button)
-	ai_white_button = _make_button()
-	ai_white_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ai_white_button.pressed.connect(_on_ai_white_pressed)
-	_ai_section_row.add_child(ai_white_button)
 
 	# 返回标题
 	var return_btn := _make_button()
@@ -1093,12 +1093,30 @@ func _refresh_buttons() -> void:
 
 func _on_mode_pressed() -> void:
 	# 机机对战从标题进入；对局内点模式按钮则在 人机/双人 间切换（机机→人机）
+	if move_count > 1 and winner == 0:
+		_confirm_mode_switch()
+		return
+	_apply_mode_switch()
+
+func _apply_mode_switch() -> void:
 	if game_mode == GameMode.PVE:
 		game_mode = GameMode.PVP
 	else:
 		game_mode = GameMode.PVE
 	_refresh_buttons()
 	_new_game()
+
+## 对局进行中切模式：先确认放弃本局，避免误触丢局。
+func _confirm_mode_switch() -> void:
+	if _mode_confirm != null:
+		_mode_confirm.queue_free()
+	_mode_confirm = ConfirmationDialog.new()
+	_mode_confirm.dialog_text = "当前对局尚未结束，切换模式将放弃本局。确定切换？"
+	_mode_confirm.ok_button_text = "切换"
+	_mode_confirm.cancel_button_text = "继续对局"
+	add_child(_mode_confirm)
+	_mode_confirm.confirmed.connect(_apply_mode_switch)
+	_mode_confirm.popup_centered()
 
 
 ## 模式显示名。
