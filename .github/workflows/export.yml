@@ -1,0 +1,105 @@
+name: Export Builds
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7.1
+
+jobs:
+  export:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot editor and export templates
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: |
+            godot-editor
+            C:\Users\runneradmin\AppData\Roaming\Godot\export_templates
+          key: godot-${{ env.GODOT_VERSION }}-win64
+
+      - name: Download Godot and export templates
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "https://github.com/godotengine/godot/releases/download/$env:GODOT_VERSION-stable"
+          New-Item -ItemType Directory -Force godot-editor | Out-Null
+          Invoke-WebRequest "$base/Godot_$($env:GODOT_VERSION)-stable_win64.exe.zip" -OutFile godot.zip
+          Invoke-WebRequest "$base/Godot_$($env:GODOT_VERSION)-stable_export_templates.tpz" -OutFile templates.tpz
+          Expand-Archive godot.zip -DestinationPath godot-editor -Force
+          tar -xf templates.tpz
+          $dst = "$env:APPDATA\Godot\export_templates\$($env:GODOT_VERSION).stable"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item templates/* $dst -Force
+          Write-Host "== installed templates =="; Get-ChildItem $dst | Select-Object Name
+
+      - name: Run regression tests (14 cases)
+        shell: pwsh
+        run: |
+          $godot = ".\godot-editor\Godot_$($env:GODOT_VERSION)-stable_win64.exe"
+          $out = & $godot --headless --script tests/threat_test.gd --path . 2>&1 | Out-String
+          Write-Host $out
+          if ($out -match 'FAIL') { exit 1 }
+          if ($out -notmatch 'ALL 14 PASSED') { exit 1 }
+
+      # 与本地一致的导出流程：临时停用编辑器插件再导出
+      - name: Disable editor plugin for export
+        shell: pwsh
+        run: |
+          (Get-Content project.godot -Raw) `
+            -replace 'enabled=PackedStringArray\("res://addons/godot_mcp/plugin.cfg"\)', 'enabled=PackedStringArray()' |
+            Set-Content project.godot -NoNewline
+
+      - name: Export Windows build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/windows | Out-Null
+          & ".\godot-editor\Godot_$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Windows" build/windows/Gomoku.exe --path .
+          if (-not (Test-Path build/windows/Gomoku.exe)) { throw "Windows export failed" }
+          Get-ChildItem build/windows | Select-Object Name, Length
+
+      - name: Package Windows build
+        shell: pwsh
+        run: |
+          Copy-Item engine build/windows/engine -Recurse
+          Compress-Archive -Path build/windows/* -DestinationPath Gomoku-win64.zip -Force
+
+      - name: Export Web build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/web | Out-Null
+          & ".\godot-editor\Godot_$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Web" build/web/index.html --path .
+          if (-not (Test-Path build/web/index.pck)) { throw "Web export failed" }
+          Get-ChildItem build/web | Select-Object Name, Length
+
+      - name: Package Web build
+        shell: pwsh
+        run: Compress-Archive -Path build/web/* -DestinationPath Gomoku-web.zip -Force
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: Gomoku-win64.zip
+
+      - name: Upload artifacts (web)
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: Gomoku-web.zip
+
+      - name: Create GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" --title "$env:GITHUB_REF_NAME" --generate-notes Gomoku-win64.zip Gomoku-web.zip
