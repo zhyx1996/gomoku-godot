@@ -68,8 +68,19 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/windows | Out-Null
-          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Windows" build/windows/Gomoku.exe --path .
-          if (-not (Test-Path build/windows/Gomoku.exe)) { throw "Windows export failed" }
+          # 无头导出会自杀重启：父进程立即退出、子进程异步完成，必须轮询等待产物稳定
+          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Windows" build/windows/Gomoku.exe --path . | Out-Null
+          $exe = "build/windows/Gomoku.exe"; $last = -1; $deadline = (Get-Date).AddMinutes(8)
+          while ($true) {
+            if (Test-Path $exe) {
+              $sz = (Get-Item $exe).Length
+              if ($sz -eq $last -and $sz -gt 50MB) { break }
+              $last = $sz
+            }
+            if ((Get-Date) -gt $deadline) { throw "Windows export timed out" }
+            Start-Sleep -Seconds 5
+          }
+          Start-Sleep -Seconds 3
           Get-ChildItem build/windows | Select-Object Name, Length
 
       - name: Package Windows build
@@ -82,8 +93,18 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/web | Out-Null
-          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Web" build/web/index.html --path .
-          if (-not (Test-Path build/web/index.pck)) { throw "Web export failed" }
+          # 同上：等待产物稳定而非信任退出码
+          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Web" build/web/index.html --path . | Out-Null
+          $pck = "build/web/index.pck"; $last = -1; $deadline = (Get-Date).AddMinutes(8)
+          while ($true) {
+            if (Test-Path $pck) {
+              $sz = (Get-Item $pck).Length
+              if ($sz -eq $last -and $sz -gt 5MB) { break }
+              $last = $sz
+            }
+            if ((Get-Date) -gt $deadline) { throw "Web export timed out" }
+            Start-Sleep -Seconds 5
+          }
           Get-ChildItem build/web | Select-Object Name, Length
 
       - name: Package Web build
