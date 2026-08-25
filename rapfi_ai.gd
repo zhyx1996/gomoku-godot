@@ -107,6 +107,10 @@ func start(difficulty: int = Difficulty.MEDIUM) -> bool:
 	# 使用全部 CPU 核心（Rapfi 原生默认即多线程并行搜索，之前被压成 1 线程导致速度慢）
 	threads = maxi(1, OS.get_processor_count())
 	_apply_config()
+	# 简单档：收窄选点并限深，保证新手面对的是「秒回」且明显放水的对手
+	if difficulty == Difficulty.EASY:
+		_send("INFO CAUTION_FACTOR 0")
+		_send("INFO MAX_DEPTH 8")
 
 	_wait_msec(80)
 	_drain()
