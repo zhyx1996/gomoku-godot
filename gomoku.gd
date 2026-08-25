@@ -132,6 +132,12 @@ var _reduced_fx := false                 # 减弱动效（无障碍）：关闭�
 var fx_button: Button = null             # 「动效」开关按钮
 var _settings_scroll: ScrollContainer = null  # 设置弹窗滚动容器（视口自适应）
 var _status_base := ""                   # 状态栏基础文案（思考中省略号动画基于它拼接）
+var _status_pill: PanelContainer = null  # 对局状态胶囊（godot-ui：信息即时可读）
+var _status_dot: Label = null            # 状态点：青=行动方 金=结束 品红=思考中
+var _mode_badge: Label = null            # 侧栏模式徽章
+var _win_dim: ColorRect = null           # 胜利时全屏压暗层
+var _win_center: CenterContainer = null  # 胜利卡片响应式居中容器
+var _win_card: PanelContainer = null     # 胜利横幅玻璃卡片
 
 # ---- 分析状态（引擎回调更新）----
 var _realtime_best := Vector2i(-1, -1)  # 思考中引擎当前最佳候选点
@@ -715,17 +721,50 @@ func _build_ui() -> void:
 	layout.add_theme_constant_override("separation", 7)
 	scroll.add_child(layout)
 
+	# 头部：标题 + 模式徽章同行（一眼可读当前对局类型）
+	var head_row := HBoxContainer.new()
+	head_row.add_theme_constant_override("separation", 8)
+	layout.add_child(head_row)
 	var title_label := Label.new()
 	title_label.text = "五子棋"
-	title_label.add_theme_font_size_override("font_size", 28)
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_label.add_theme_font_size_override("font_size", 26)
 	title_label.add_theme_color_override("font_color", ACCENT_CYAN)
-	layout.add_child(title_label)
+	head_row.add_child(title_label)
+	_mode_badge = Label.new()
+	_mode_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_mode_badge.add_theme_font_size_override("font_size", 12)
+	_mode_badge.add_theme_color_override("font_color", Color("9db4d8"))
+	head_row.add_child(_mode_badge)
 
+	# 状态胶囊：圆点颜色编码 + 文字（比裸文本更快被读取）
+	_status_pill = PanelContainer.new()
+	var pill := StyleBoxFlat.new()
+	pill.bg_color = Color(0.10, 0.15, 0.25, 0.66)
+	pill.border_color = Color(0.36, 0.50, 0.78, 0.35)
+	pill.set_border_width_all(1)
+	pill.set_corner_radius_all(19)
+	pill.content_margin_left = 14
+	pill.content_margin_right = 14
+	pill.content_margin_top = 7
+	pill.content_margin_bottom = 7
+	_status_pill.add_theme_stylebox_override("panel", pill)
+	var pill_row := HBoxContainer.new()
+	pill_row.add_theme_constant_override("separation", 8)
+	_status_pill.add_child(pill_row)
+	_status_dot = Label.new()
+	_status_dot.text = "●"
+	_status_dot.add_theme_font_size_override("font_size", 13)
+	_status_dot.add_theme_color_override("font_color", Color("4ade80"))
+	pill_row.add_child(_status_dot)
 	status_label = Label.new()
-	status_label.custom_minimum_size = Vector2(0, 48)
-	status_label.add_theme_font_size_override("font_size", 19)
+	status_label.custom_minimum_size = Vector2(0, 24)
+	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status_label.add_theme_font_size_override("font_size", 16)
 	status_label.add_theme_color_override("font_color", Color("e8f0fc"))
-	layout.add_child(status_label)
+	pill_row.add_child(status_label)
+	layout.add_child(_status_pill)
 
 	# ── 对局 ──
 	layout.add_child(_section_label("对局"))
@@ -1055,6 +1094,8 @@ func _style_toggle_state(b: Button, enabled: bool) -> void:
 func _refresh_buttons() -> void:
 	if mode_button:
 		mode_button.text = "模式：%s" % _mode_name()
+	if _mode_badge != null:
+		_mode_badge.text = "· %s" % _mode_name()
 	if color_button:
 		color_button.text = "你执：%s" % ("黑棋" if human_color == 1 else "白棋")
 		color_button.visible = game_mode == GameMode.PVE
@@ -1767,6 +1808,13 @@ func _update_status_text() -> void:
 			_status_base = "轮到%s落子" % _player_name(current_player)
 	if status_label != null:
 		status_label.text = _status_base
+	if _status_dot != null:
+		var dot_color := Color("4ade80")
+		if winner != 0:
+			dot_color = ACCENT_GOLD
+		elif ai_thinking:
+			dot_color = ACCENT_MAGENTA
+		_status_dot.add_theme_color_override("font_color", dot_color)
 	# 停止按钮仅在引擎思考时可用
 	if stop_button:
 		stop_button.disabled = not ai_thinking
@@ -2104,98 +2152,103 @@ func _trigger_win_fx() -> void:
 
 
 func _show_win_banner() -> void:
-	if _win_label == null:
+	## 卡片化胜利横幅（game-ui-design：聚焦 + 层级；godot-ui/godot-master：
+	## CenterContainer 响应式居中，不用绝对像素；容器 mouse_filter=IGNORE 不挡棋盘）
+	if _game_ui_layer == null:
+		return
+	if _win_dim == null:
+		_win_dim = ColorRect.new()
+		_win_dim.color = Color(0.02, 0.04, 0.09, 0.45)
+		_win_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_game_ui_layer.add_child(_win_dim)
+	if _win_center == null:
+		_win_center = CenterContainer.new()
+		_win_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_win_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_game_ui_layer.add_child(_win_center)
+	if _win_card == null:
+		_win_card = PanelContainer.new()
+		var card := StyleBoxFlat.new()
+		card.bg_color = Color(0.07, 0.10, 0.17, 0.92)
+		card.border_color = Color(ACCENT_GOLD, 0.55)
+		card.set_border_width_all(1)
+		card.set_corner_radius_all(20)
+		card.shadow_color = Color(0, 0, 0, 0.5)
+		card.shadow_size = 24
+		card.content_margin_left = 44
+		card.content_margin_right = 44
+		card.content_margin_top = 30
+		card.content_margin_bottom = 30
+		_win_card.add_theme_stylebox_override("panel", card)
+		_win_center.add_child(_win_card)
+
+		var card_box := VBoxContainer.new()
+		card_box.alignment = BoxContainer.ALIGNMENT_CENTER
+		card_box.add_theme_constant_override("separation", 10)
+		_win_card.add_child(card_box)
+
 		_win_label = Label.new()
-		_win_label.add_theme_font_size_override("font_size", 64)
+		_win_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_win_label.add_theme_font_size_override("font_size", 54)
 		_win_label.add_theme_color_override("font_color", ACCENT_GOLD)
 		_win_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
 		_win_label.add_theme_constant_override("outline_size", 8)
-		_win_label.z_index = 100
-		add_child(_win_label)
-	var msg := "黑棋获胜！" if winner == 1 else "白棋获胜！"
-	_win_label.text = msg
-	_win_label.reset_size()
-	# 居中
-	var vp := get_viewport_rect().size
-	_win_label.position = Vector2((vp.x - _win_label.size.x) / 2.0, vp.y * 0.28)
-	_win_label.modulate.a = 0.0
-	_win_label.scale = Vector2(0.3, 0.3)
+		card_box.add_child(_win_label)
 
-	# 胜利后按钮行：再来一局（主）+ 返回标题（次）
-	if _win_buttons == null:
+		var sub := Label.new()
+		sub.name = "WinSub"
+		sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		sub.add_theme_font_size_override("font_size", 14)
+		sub.add_theme_color_override("font_color", Color("9db4d8"))
+		card_box.add_child(sub)
+
 		_win_buttons = HBoxContainer.new()
+		_win_buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 		_win_buttons.add_theme_constant_override("separation", 14)
-		_win_buttons.z_index = 100
-		add_child(_win_buttons)
+		card_box.add_child(_win_buttons)
 
 		_rematch_button = Button.new()
 		_rematch_button.text = "再来一局"
-		_rematch_button.add_theme_font_size_override("font_size", 20)
-		var bs := StyleBoxFlat.new()
-		bs.bg_color = Color("0ea5e9")
-		bs.border_color = Color("7dd3fc")
-		bs.set_border_width_all(1)
-		bs.set_corner_radius_all(12)
-		bs.shadow_color = Color(0.22, 0.60, 0.96, 0.4)
-		bs.shadow_size = 10
-		bs.content_margin_left = 26
-		bs.content_margin_right = 26
-		bs.content_margin_top = 12
-		bs.content_margin_bottom = 12
-		_rematch_button.add_theme_stylebox_override("normal", bs)
-		var bh: StyleBoxFlat = bs.duplicate()
-		bh.bg_color = Color("38bdf8")
-		bh.shadow_size = 14
-		_rematch_button.add_theme_stylebox_override("hover", bh)
-		var bp: StyleBoxFlat = bs.duplicate()
-		bp.bg_color = Color("0284c7")
-		_rematch_button.add_theme_stylebox_override("pressed", bp)
-		_rematch_button.add_theme_color_override("font_color", Color("ffffff"))
-		_rematch_button.add_theme_color_override("font_hover_color", Color("ffffff"))
-		_rematch_button.add_theme_color_override("font_pressed_color", Color("ffffff"))
+		_rematch_button.custom_minimum_size = Vector2(170, 50)
+		_rematch_button.add_theme_font_size_override("font_size", 18)
+		_style_primary_button(_rematch_button)
 		_rematch_button.pressed.connect(_on_rematch_pressed)
 		_win_buttons.add_child(_rematch_button)
 
 		_return_title_btn = Button.new()
 		_return_title_btn.text = "返回标题"
-		_return_title_btn.add_theme_font_size_override("font_size", 20)
+		_return_title_btn.custom_minimum_size = Vector2(150, 50)
+		_return_title_btn.add_theme_font_size_override("font_size", 18)
+		_style_ghost_outline_button(_return_title_btn)
 		_return_title_btn.pressed.connect(_return_to_title)
-		var rs := StyleBoxFlat.new()
-		rs.bg_color = Color(0.10, 0.14, 0.22, 0.7)
-		rs.border_color = Color(0.32, 0.46, 0.72, 0.5)
-		rs.set_border_width_all(1)
-		rs.set_corner_radius_all(12)
-		rs.content_margin_left = 26
-		rs.content_margin_right = 26
-		rs.content_margin_top = 12
-		rs.content_margin_bottom = 12
-		_return_title_btn.add_theme_stylebox_override("normal", rs)
-		var rh: StyleBoxFlat = rs.duplicate()
-		rh.bg_color = Color(0.16, 0.23, 0.38, 0.72)
-		rh.border_color = Color(0.32, 0.78, 0.99, 0.6)
-		_return_title_btn.add_theme_stylebox_override("hover", rh)
-		var rp: StyleBoxFlat = rs.duplicate()
-		rp.bg_color = Color(0.12, 0.18, 0.30, 0.8)
-		_return_title_btn.add_theme_stylebox_override("pressed", rp)
-		_return_title_btn.add_theme_color_override("font_color", Color("c3cfe2"))
-		_return_title_btn.add_theme_color_override("font_hover_color", Color("ffffff"))
-		_return_title_btn.add_theme_color_override("font_pressed_color", Color("ffffff"))
 		_win_buttons.add_child(_return_title_btn)
 
-	_win_buttons.reset_size()
-	_win_buttons.position = Vector2((vp.x - _win_buttons.size.x) / 2.0, vp.y * 0.28 + 92)
-	_win_buttons.modulate.a = 0.0
-	_win_buttons.visible = true
+	var msg := "黑棋获胜！" if winner == 1 else "白棋获胜！"
+	if winner == 3:
+		msg = "平局"
+	_win_label.text = msg
+	for n in _win_card.get_children():
+		if n is VBoxContainer:
+			for c in n.get_children():
+				if c is Label and c != _win_label:
+					c.text = "共 %d 手" % move_count
+	_win_dim.visible = true
+	_win_dim.modulate.a = 0.0
+	_win_card.modulate.a = 0.0
 
 	if _win_tween != null and _win_tween.is_valid():
 		_win_tween.kill()
+	# 等一帧让 CenterContainer 完成布局，再取尺寸定缩放中心（避免从左上角缩放）
+	await get_tree().process_frame
+	if _win_card == null or not is_instance_valid(_win_card):
+		return
+	_win_card.pivot_offset = _win_card.size / 2.0
+	_win_card.scale = Vector2(0.88, 0.88)
 	_win_tween = create_tween()
 	_win_tween.set_parallel(true)
-	_win_tween.tween_property(_win_label, "modulate:a", 1.0, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	_win_tween.tween_property(_win_label, "scale", Vector2(1.0, 1.0), 0.5).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	_win_tween.tween_property(_win_buttons, "modulate:a", 1.0, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(0.25)
-	_win_tween.set_parallel(false)
-	_win_tween.tween_property(_win_label, "modulate:a", 0.85, 0.6).set_delay(1.2)
+	_win_tween.tween_property(_win_dim, "modulate:a", 1.0, 0.35)
+	_win_tween.tween_property(_win_card, "modulate:a", 1.0, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_win_tween.tween_property(_win_card, "scale", Vector2.ONE, 0.5).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _on_rematch_pressed() -> void:
@@ -2206,11 +2259,14 @@ func _hide_win_banner() -> void:
 	if _win_tween != null and _win_tween.is_valid():
 		_win_tween.kill()
 		_win_tween = null
-	if _win_label != null:
-		_win_label.queue_free()
-		_win_label = null
-	if _win_buttons != null:
-		_win_buttons.visible = false
+	for n in [_win_dim, _win_center]:
+		if n != null:
+			n.queue_free()
+	_win_dim = null
+	_win_center = null
+	_win_card = null
+	_win_label = null
+	_win_buttons = null
 
 
 # ============================================================
