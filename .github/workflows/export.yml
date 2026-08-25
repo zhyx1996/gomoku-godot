@@ -36,7 +36,7 @@ jobs:
           Invoke-WebRequest "$base/Godot_v$($env:GODOT_VERSION)-stable_export_templates.tpz" -OutFile templates.tpz
           Expand-Archive godot.zip -DestinationPath godot-editor -Force
           tar -xf templates.tpz
-          $dst = "$env:APPDATA\Godot\export_templates\$($env:GODOT_VERSION).stable"
+          $dst = "$env:APPDATA\Godot\export_templates$($env:GODOT_VERSION).stable"
           New-Item -ItemType Directory -Force $dst | Out-Null
           Copy-Item templates/* $dst -Force
           Write-Host "== installed templates =="; Get-ChildItem $dst | Select-Object Name
@@ -45,7 +45,7 @@ jobs:
       - name: Import project resources
         shell: pwsh
         run: |
-          & ".\godot-editor\Godot_v\$($env:GODOT_VERSION)-stable_win64.exe" --headless --import --path . 2>&1 | Select-Object -Last 3
+          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --import --path . 2>&1 | Select-Object -Last 3
 
       - name: Run regression tests (14 cases)
         shell: pwsh
