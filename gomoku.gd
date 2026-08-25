@@ -136,6 +136,10 @@ var _status_pill: PanelContainer = null  # 对局状态胶囊（godot-ui：信�
 var _status_dot: Label = null            # 状态点：青=行动方 金=结束 品红=思考中
 var _mode_badge: Label = null            # 侧栏模式徽章
 var _win_dim: ColorRect = null           # 胜利时全屏压暗层
+var _win_flash := -1.0                   # 胜利触发时刻（全屏微闪用，<0 关闭）
+var _title_glow_label: Button = null     # 标题文字（呼吸流光作用对象）
+var _plaque_ref: PanelContainer = null   # 标题牌匾（入场动画/裁切光带宿主）
+var _sheen_rect: ColorRect = null        # 牌匾玻璃斜向流光带
 var _win_center: CenterContainer = null  # 胜利卡片响应式居中容器
 var _win_card: PanelContainer = null     # 胜利横幅玻璃卡片
 
@@ -204,6 +208,10 @@ func _process(delta: float) -> void:
 	# AI 思考中：状态文字动态省略号（等待反馈）
 	if _in_game and ai_thinking and winner == 0 and status_label != null:
 		status_label.text = _status_base + ".".repeat(1 + int(_fx_time * 3.0) % 3)
+	# 标题文字呼吸流光：青 ↔ 冰蓝缓慢往复（仅标题界面存在时）
+	if _title_glow_label != null and is_instance_valid(_title_glow_label):
+		var k := 0.5 + 0.5 * sin(_fx_time * 1.6)
+		_title_glow_label.add_theme_color_override("font_color", ACCENT_CYAN.lerp(Color("bfe9ff"), k))
 	if not _in_game:
 		# 标题界面：只重绘背景粒子
 		queue_redraw()
@@ -277,7 +285,7 @@ func _spawn_confetti() -> void:
 		return
 	_confetti.clear()
 	var size := get_viewport_rect().size
-	var colors := [ACCENT_GOLD, ACCENT_CYAN, ACCENT_MAGENTA, ACCENT_GREEN, Color("f87171")]
+	var colors := [ACCENT_GOLD, ACCENT_GOLD, Color("fde68a"), ACCENT_CYAN, ACCENT_MAGENTA, ACCENT_GREEN, Color("f87171")]
 	for i in range(140):
 		_confetti.append({
 			"pos": Vector2(randf_range(0, size.x), randf_range(-size.y * 0.25, -10.0)),
@@ -296,6 +304,13 @@ func _spawn_confetti() -> void:
 # ============================================================
 # 标题界面（主菜单）
 # ============================================================
+## 释放标题层前置空成员引用，避免悬空访问。
+func _clear_title_refs() -> void:
+	_title_glow_label = null
+	_plaque_ref = null
+	_sheen_rect = null
+
+
 func _build_title_screen() -> void:
 	_title_layer = CanvasLayer.new()
 	add_child(_title_layer)
@@ -311,6 +326,28 @@ func _build_title_screen() -> void:
 	# ── 牌匾：标题 + 朱砂印章（签名元素）──
 	var plaque := PanelContainer.new()
 	plaque.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	plaque.clip_contents = true
+	_plaque_ref = plaque
+	# 入场：布局完成后牌匾整体淡入（BACK 缓动，微回弹）
+	plaque.modulate.a = 0.0
+	plaque.resized.connect(func():
+		if _plaque_ref != null and is_instance_valid(_plaque_ref):
+			var et: Tween = _plaque_ref.create_tween()
+			et.tween_property(_plaque_ref, "modulate:a", 1.0, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	, CONNECT_ONE_SHOT)
+	# 玻璃斜向流光带：周期性扫过牌匾（clip 裁切出「玻璃反光」质感）
+	_sheen_rect = ColorRect.new()
+	_sheen_rect.color = Color(1, 1, 1, 0.075)
+	_sheen_rect.size = Vector2(96, 620)
+	_sheen_rect.rotation_degrees = 16.0
+	_sheen_rect.pivot_offset = Vector2(48, 310)
+	_sheen_rect.position = Vector2(-140, -90)
+	plaque.add_child(_sheen_rect)
+	var st: Tween = _sheen_rect.create_tween()
+	st.set_loops()
+	st.tween_interval(2.4)
+	st.tween_property(_sheen_rect, "position:x", 620.0, 1.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	st.tween_property(_sheen_rect, "position:x", -140.0, 0.0)
 	var plaque_style := StyleBoxFlat.new()
 	plaque_style.bg_color = Color(0.08, 0.11, 0.19, 0.72)   # 玻璃牌匾底
 	plaque_style.border_color = Color(0.32, 0.52, 0.86, 0.5) # 蓝光描边
@@ -351,10 +388,14 @@ func _build_title_screen() -> void:
 	var title := Button.new()
 	title.text = "五子棋"
 	title.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 72)
+	title.add_theme_font_size_override("font_size", 76)
+	# 立体感：深色描边垫底，呼吸流光在 _process 中驱动 font_color
+	title.add_theme_color_override("font_outline_color", Color(0.01, 0.05, 0.12, 0.85))
+	title.add_theme_constant_override("outline_size", 10)
 	title.add_theme_color_override("font_color", ACCENT_CYAN)
-	title.add_theme_color_override("font_hover_color", Color("7dd3fc"))
+	title.add_theme_color_override("font_hover_color", Color("eaf7ff"))
 	title.add_theme_color_override("font_pressed_color", ACCENT_CYAN)
+	_title_glow_label = title
 	_style_ghost_button(title)
 	title.pressed.connect(_on_title_secret_click)
 	title_row.add_child(title)
@@ -466,6 +507,7 @@ func _start_game(mode: int) -> void:
 		_toast_label.modulate.a = 0.0
 	_toast_until = -1.0
 	if _title_layer != null:
+		_clear_title_refs()
 		_title_layer.queue_free()
 		_title_layer = null
 	_in_game = true
@@ -2145,6 +2187,7 @@ func _has_five_in_a_row(origin: Vector2i, player: int) -> bool:
 # ============================================================
 func _trigger_win_fx() -> void:
 	_win_anim = 0.0
+	_win_flash = _fx_time
 	_spawn_confetti()
 	if _win_player:
 		_win_player.play()
@@ -2286,7 +2329,7 @@ func _show_toast(text: String) -> void:
 	_toast_label.reset_size()
 	_toast_label.modulate.a = 1.0
 	var vp := get_viewport_rect().size
-	_toast_label.position = Vector2((vp.x - _toast_label.size.x) / 2.0, vp.y - 100.0)
+	_toast_label.position = Vector2((vp.x - _toast_label.size.x) / 2.0, 26.0)
 	_toast_until = _fx_time + 2.5
 
 
@@ -2397,6 +2440,7 @@ func _draw() -> void:
 		return
 	_draw_board()
 	_draw_stones()
+	_draw_win_beam()
 	_draw_hover()
 	_draw_forbid()
 	_draw_realtime()
@@ -2406,6 +2450,7 @@ func _draw() -> void:
 	_draw_win_glow()
 	_draw_confetti()
 	_draw_eval_chart()
+	_draw_win_flash()
 
 
 func _draw_background() -> void:
@@ -2560,6 +2605,64 @@ func _draw_hover() -> void:
 
 
 ## 绘制胜利彩带（旋转的小色块下落）。
+## 必胜连珠特效：金色能量束渐进贯穿五子 + 波前逐子白闪 + 震中双冲击波环。
+## 减弱动效模式下整体跳过（无障碍：保留信息性辉光，去除强刺激层）。
+func _draw_win_beam() -> void:
+	if winner == 0 or winning_cells.size() < 5 or _reduced_fx:
+		return
+	var t := clampf(_win_anim, 0.0, 1.0)
+	var pts: Array[Vector2] = []
+	for c in winning_cells:
+		pts.append(_cell_to_screen(c))
+	var total := 0.0
+	var cum: Array[float] = [0.0]
+	for i in range(1, pts.size()):
+		total += pts[i - 1].distance_to(pts[i])
+		cum.append(total)
+	if total <= 0.0:
+		return
+	# 光束推进：ease-out 先疾后缓
+	var reach := total * (1.0 - pow(1.0 - t, 2.4))
+	var seg: Array[Vector2] = [pts[0]]
+	for i in range(1, pts.size()):
+		if reach >= cum[i] - 0.001:
+			if seg[seg.size() - 1].distance_to(pts[i]) > 0.01:
+				seg.append(pts[i])
+		else:
+			var k := clampf((reach - cum[i - 1]) / maxf(cum[i] - cum[i - 1], 0.001), 0.0, 1.0)
+			var p := pts[i - 1].lerp(pts[i], k)
+			if seg[seg.size() - 1].distance_to(p) > 0.01:
+				seg.append(p)
+			break
+	if seg.size() >= 2 and seg[0].distance_to(seg[seg.size() - 1]) > 0.01:
+		var cs := _cell_size()
+		for layer in [[cs * 0.85, 0.10], [cs * 0.48, 0.20], [cs * 0.22, 0.45], [cs * 0.09, 0.95]]:
+			draw_polyline(PackedVector2Array(seg), Color(ACCENT_GOLD, layer[1]), layer[0])
+	# 波前经过的棋子闪白（高斯衰减）
+	for i in range(pts.size()):
+		var local := cum[i] / total
+		var flash := exp(-pow((reach / total - local) * 6.5, 2.0))
+		if flash > 0.02:
+			draw_circle(pts[i], _cell_size() * 0.52, Color(1.0, 1.0, 0.9, flash * 0.85))
+	# 震中双环冲击波（错峰扩散、随进程消散）
+	var center := pts[pts.size() - 1]
+	var r1 := (1.0 - pow(1.0 - t, 3.0)) * _cell_size() * 7.0
+	draw_arc(center, r1, 0.0, TAU, 48, Color(ACCENT_GOLD, (1.0 - t) * 0.5), 3.0)
+	var t2 := clampf(t * 1.35 - 0.25, 0.0, 1.0)
+	if t2 > 0.0:
+		var r2 := (1.0 - pow(1.0 - t2, 3.0)) * _cell_size() * 4.5
+		draw_arc(center, r2, 0.0, TAU, 40, Color("ffffff", (1.0 - t2) * 0.30), 2.0)
+
+
+## 胜利触发瞬间的全屏微闪（0.18s 消退），强化定格冲击感。
+func _draw_win_flash() -> void:
+	if _win_flash < 0.0 or _reduced_fx:
+		return
+	var age := _fx_time - _win_flash
+	if age < 0.18:
+		draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), Color(1.0, 0.98, 0.9, 0.30 * (1.0 - age / 0.18)))
+
+
 func _draw_confetti() -> void:
 	if _confetti.is_empty():
 		return
