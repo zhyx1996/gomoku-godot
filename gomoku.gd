@@ -1269,8 +1269,8 @@ func _on_board_size_pressed() -> void:
 
 func _on_think_time_pressed() -> void:
 	_think_time_index = (_think_time_index + 1) % 4
-	# 档位对应思考时间（毫秒）：快 300 / 中 1500 / 慢 5000 / 分析 10000
-	var timeouts := [300, 1500, 5000, 10000]
+	# 档位对应思考时间（毫秒）：快 300 / 中 1000 / 慢 3000 / 分析 6000
+	var timeouts := [300, 1000, 3000, 6000]
 	if ai != null:
 		ai.set_config("timeout_turn", timeouts[_think_time_index])
 	_refresh_buttons()
@@ -1719,11 +1719,8 @@ func _ai_turn() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var move: Vector2i
-	if OS.has_feature("web"):
-		move = await ai.think_async(last_move)
-	else:
-		move = ai.think(last_move)
+	# 原生/网页统一走异步：引擎在后台线程思考，主线程持续渲染与响应
+	var move: Vector2i = await ai.think_async(last_move)
 	ai_thinking = false
 
 	if not _in_game or gen != _turn_generation:
@@ -1806,11 +1803,7 @@ func _ai_turn_first() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var move: Vector2i
-	if OS.has_feature("web"):
-		move = await ai.think_first_async()
-	else:
-		move = ai.think_first()
+	var move: Vector2i = await ai.think_first_async()
 	ai_thinking = false
 
 	if not _in_game or gen != _turn_generation:

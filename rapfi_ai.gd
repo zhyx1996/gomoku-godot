@@ -63,6 +63,9 @@ var _difficulty: int = Difficulty.MEDIUM
 var _started := false
 var _web_ready := false          # 网页端：引擎已加载并完成初始化
 var _stop_requested := false     # 已请求停止当前思考（用于让异步 await 返回 -1）
+var _think_thread: Thread = null      # 原生端：后台思考线程（主线程保持流畅）
+var _on_thread := false               # 当前是否处于后台线程读循环（分析数据转 deferred 用）
+var _zombie_threads: Array[Thread] = []  # 已停止但尚未自然退出的旧线程，防悬空释放
 
 # 分析数据回调（引擎每输出一条 INFO，调用此 Callable）
 var analysis_callback: Callable = Callable()
@@ -233,32 +236,63 @@ func think(player_move: Vector2i) -> Vector2i:
 	return _wait_coord()
 
 
-## 网页端异步思考应手（等待引擎就绪后发送命令，再 await move_ready）。
+## 异步思考应手：原生在后台线程阻塞等引擎，主线程零冻结；网页走 JS 桥轮询。
 func think_async(player_move: Vector2i) -> Vector2i:
 	if not _started:
 		return Vector2i(-1, -1)
 	if IS_WEB and not _web_ready:
 		await web_ready
+	if not IS_WEB and _think_thread != null and _think_thread.is_alive():
+		return Vector2i(-1, -1)  # 上一步仍在收尾，丢弃本次请求
 	_stop_requested = false
 	_send("TURN %d,%d" % [player_move.x, player_move.y])
+	if IS_WEB:
+		var web_move: Vector2i = await move_ready
+		return Vector2i(-1, -1) if _stop_requested else web_move
+	_think_thread = Thread.new()
+	_think_thread.start(_thread_wait_coord)
 	var move: Vector2i = await move_ready
+	if _think_thread != null and not _think_thread.is_alive():
+		_think_thread.wait_to_finish()  # 已结束，回收以消除销毁警告
 	if _stop_requested:
 		return Vector2i(-1, -1)
 	return move
 
 
-## 网页端异步先手（BEGIN）。
+## 异步先手（BEGIN），线程策略同上。
 func think_first_async() -> Vector2i:
 	if not _started:
 		return Vector2i(-1, -1)
 	if IS_WEB and not _web_ready:
 		await web_ready
+	if not IS_WEB and _think_thread != null and _think_thread.is_alive():
+		return Vector2i(-1, -1)
 	_stop_requested = false
 	_send("BEGIN")
+	if IS_WEB:
+		var web_move: Vector2i = await move_ready
+		return Vector2i(-1, -1) if _stop_requested else web_move
+	_think_thread = Thread.new()
+	_think_thread.start(_thread_wait_coord)
 	var move: Vector2i = await move_ready
+	if _think_thread != null and not _think_thread.is_alive():
+		_think_thread.wait_to_finish()
 	if _stop_requested:
 		return Vector2i(-1, -1)
 	return move
+
+
+## 后台线程主体：阻塞读引擎输出直到走出法（主线程不受影响）。
+func _thread_wait_coord() -> void:
+	_on_thread = true
+	var mv := _wait_coord()
+	_on_thread = false
+	call_deferred("_emit_move_ready", mv)
+
+
+## 线程结果经 deferred 投递回主线程再发信号（信号跨线程直发不安全）。
+func _emit_move_ready(mv: Vector2i) -> void:
+	move_ready.emit(mv)
 
 
 ## 分析当前局面（不落子，只输出分析数据）。
@@ -276,13 +310,10 @@ func analyze(board: Array, ai_color: int, nbest_count: int = 1) -> void:
 	_send("YXNBEST %d" % nbest_count)
 
 
-## 停止当前思考。
+## 停止当前思考。原生：置停标志并给引擎 1.2s 宽限输出候着走法，随后后台线程自行退出。
 func stop_thinking() -> void:
 	_stop_requested = true
 	_send("YXSTOP")
-	if IS_WEB:
-		# 立即解除挂起的 await，返回 -1 表示被停止（引擎稍后可能仍会输出走法，但会被丢弃）
-		move_ready.emit(Vector2i(-1, -1))
 
 
 ## 重建引擎棋盘（悔棋后同步用）：START 后重发全部棋子。
@@ -297,6 +328,7 @@ func sync_board(board: Array, ai_color: int) -> void:
 
 
 ## 阻塞等待引擎返回坐标走法，同时把 INFO 输出转发给 analysis_callback。
+## 收到停止请求后最多再等 1.2s（YXSTOP 后引擎会尽快吐出当前最佳点）。
 func _wait_coord() -> Vector2i:
 	var timeout_ms: int = timeout_turn + 8000
 	var deadline: int = Time.get_ticks_msec() + timeout_ms
@@ -306,6 +338,8 @@ func _wait_coord() -> Vector2i:
 			var handled: Variant = _handle_output_line(line)
 			if handled is Vector2i:
 				return handled
+		elif _stop_requested and Time.get_ticks_msec() > deadline - timeout_ms + 1200:
+			break
 		_wait_msec(10)
 	return Vector2i(-1, -1)
 
@@ -380,6 +414,15 @@ func _parse_info(line: String) -> void:
 		_:
 			return
 
+	if not analysis_callback.is_null():
+		if _on_thread:
+			_emit_analysis.call_deferred(data)
+		else:
+			analysis_callback.call(data)
+
+
+## 后台线程产生的分析数据经 deferred 回主线程再分发（跨线程直调不安全）。
+func _emit_analysis(data: Dictionary) -> void:
 	if not analysis_callback.is_null():
 		analysis_callback.call(data)
 
