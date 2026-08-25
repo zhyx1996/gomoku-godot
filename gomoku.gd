@@ -462,7 +462,7 @@ func _build_title_screen() -> void:
 	pvp.pressed.connect(func(): _start_game(GameMode.PVP))
 	box.add_child(pvp)
 
-	var eve := _make_menu_button("机机对战（古法编程 vs 推理引擎）")
+	var eve := _make_menu_button("！？机机？！对战")
 	eve.pressed.connect(func(): _start_game(GameMode.EVE))
 	eve.visible = _dlc_unlocked
 	box.add_child(eve)
