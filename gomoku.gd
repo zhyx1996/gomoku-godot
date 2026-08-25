@@ -465,6 +465,7 @@ func _return_to_title() -> void:
 	ai_thinking = false
 	_stop_pending = false
 	_turn_generation += 1
+	game_mode = GameMode.PVE  # 退出机机对战等模式：标题界面的难度菜单恢复为人机档位
 	_hide_win_banner()
 	if ai != null:
 		ai.stop_thinking()
