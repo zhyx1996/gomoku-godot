@@ -2,9 +2,11 @@ name: Export Builds
 
 on:
   push:
-    branches: [master]
     tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   GODOT_VERSION: 4.7.1
