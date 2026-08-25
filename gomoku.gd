@@ -128,6 +128,10 @@ var _ai_section_row: HBoxContainer = null # 设置里的 AI 执子按钮行
 var _stop_pending := false                # 已请求停止 AI（停止后撤销玩家一手）
 var _turn_generation := 0                 # 对局代数（新局/返回标题时递增，防陈旧协程落子）
 var _mode_confirm: ConfirmationDialog = null  # 对局中切换模式的放弃确认框
+var _reduced_fx := false                 # 减弱动效（无障碍）：关闭背景粒子与胜利彩带
+var fx_button: Button = null             # 「动效」开关按钮
+var _settings_scroll: ScrollContainer = null  # 设置弹窗滚动容器（视口自适应）
+var _status_base := ""                   # 状态栏基础文案（思考中省略号动画基于它拼接）
 
 # ---- 分析状态（引擎回调更新）----
 var _realtime_best := Vector2i(-1, -1)  # 思考中引擎当前最佳候选点
@@ -188,6 +192,12 @@ func _process(delta: float) -> void:
 	_fx_time += delta
 	_update_particles(delta)
 	_update_toast()
+	# 胜利连珠：弹性放大后回落（短暂夸张并回归静止）
+	if _in_game and winner != 0 and _win_anim < 1.0:
+		_win_anim = minf(_win_anim + delta * 2.2, 1.0)
+	# AI 思考中：状态文字动态省略号（等待反馈）
+	if _in_game and ai_thinking and winner == 0 and status_label != null:
+		status_label.text = _status_base + ".".repeat(1 + int(_fx_time * 3.0) % 3)
 	if not _in_game:
 		# 标题界面：只重绘背景粒子
 		queue_redraw()
@@ -257,6 +267,8 @@ func _update_particles(delta: float) -> void:
 
 ## 生成胜利彩带。
 func _spawn_confetti() -> void:
+	if _reduced_fx:
+		return
 	_confetti.clear()
 	var size := get_viewport_rect().size
 	var colors := [ACCENT_GOLD, ACCENT_CYAN, ACCENT_MAGENTA, ACCENT_GREEN, Color("f87171")]
@@ -461,6 +473,10 @@ func _open_settings() -> void:
 	if _settings_popup == null:
 		_build_settings_popup()
 	_refresh_buttons()
+	# 小窗口下限制设置面板高度，避免溢出屏幕（godot-ui 响应式建议）
+	if _settings_scroll != null:
+		var vp := get_viewport_rect().size
+		_settings_scroll.custom_minimum_size = Vector2(360, clampf(vp.y * 0.72, 320.0, 560.0))
 	_settings_popup.popup_centered()
 
 
@@ -805,6 +821,7 @@ func _build_settings_popup() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.custom_minimum_size = Vector2(360, 500)
 	_settings_popup.add_child(scroll)
+	_settings_scroll = scroll
 
 	var layout := VBoxContainer.new()
 	layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -878,6 +895,9 @@ func _build_settings_popup() -> void:
 	show_eval_button = _make_button()
 	show_eval_button.pressed.connect(_on_show_eval_pressed)
 	display_grid.add_child(show_eval_button)
+	fx_button = _make_button()
+	fx_button.pressed.connect(_on_fx_pressed)
+	display_grid.add_child(fx_button)
 	theme_button = _make_button()
 	theme_button.pressed.connect(_on_theme_pressed)
 	layout.add_child(theme_button)
@@ -1054,6 +1074,8 @@ func _refresh_buttons() -> void:
 		cand_range_button.text = "选点：%s" % ["小范围", "较小", "中等", "较大", "大范围", "全盘"][_cand_range_index]
 	if show_coord_button:
 		show_coord_button.text = "坐标：%s" % ("开" if _show_coord else "关")
+	if fx_button:
+		fx_button.text = "动效：%s" % ("减弱" if _reduced_fx else "完整")
 		_style_toggle_state(show_coord_button, _show_coord)
 	if show_index_button:
 		show_index_button.text = "序号：%s" % ("开" if _show_index else "关")
@@ -1727,24 +1749,35 @@ func _ai_turn_first() -> void:
 
 func _update_status_text() -> void:
 	if winner == 1:
-		status_label.text = "%s获胜！" % ("古法编程" if game_mode == GameMode.EVE else "黑棋")
+		_status_base = "%s获胜！" % ("古法编程" if game_mode == GameMode.EVE else "黑棋")
 	elif winner == 2:
-		status_label.text = "%s获胜！" % ("推理引擎" if game_mode == GameMode.EVE else "白棋")
+		_status_base = "%s获胜！" % ("推理引擎" if game_mode == GameMode.EVE else "白棋")
 	elif winner == 3:
-		status_label.text = "平局"
+		_status_base = "平局"
 	elif ai_thinking:
 		if game_mode == GameMode.EVE:
-			status_label.text = "「%s」思考中…" % _ai_name(current_player)
+			_status_base = "「%s」思考中" % _ai_name(current_player)
 		else:
-			status_label.text = "AI 思考中…"
+			_status_base = "AI 思考中"
 	else:
 		if game_mode == GameMode.EVE:
-			status_label.text = "「%s」落子" % _ai_name(current_player)
+			_status_base = "「%s」落子" % _ai_name(current_player)
 		else:
-			status_label.text = "轮到%s落子" % _player_name(current_player)
+			_status_base = "轮到%s落子" % _player_name(current_player)
+	if status_label != null:
+		status_label.text = _status_base
 	# 停止按钮仅在引擎思考时可用
 	if stop_button:
 		stop_button.disabled = not ai_thinking
+
+
+## 减弱动效开关（无障碍）。
+func _on_fx_pressed() -> void:
+	_reduced_fx = not _reduced_fx
+	if _reduced_fx:
+		_confetti.clear()
+		queue_redraw()
+	_refresh_buttons()
 
 
 func _player_name(player: int) -> String:
@@ -2328,10 +2361,11 @@ func _draw_background() -> void:
 		var y0 := size.y * float(i) / float(segments)
 		var y1 := size.y * float(i + 1) / float(segments)
 		draw_rect(Rect2(0, y0, size.x, y1 - y0 + 1), color)
-	# 漂浮光点
-	for p in _bg_particles:
-		var glow := 0.5 + 0.5 * sin(_fx_time * 0.8 + p["phase"])
-		draw_circle(p["pos"], p["radius"], Color(BG_PARTICLE, p["alpha"] * (0.4 + 0.6 * glow)))
+	# 漂浮光点（减弱动效时不绘制）
+	if not _reduced_fx:
+		for p in _bg_particles:
+			var glow := 0.5 + 0.5 * sin(_fx_time * 0.8 + p["phase"])
+			draw_circle(p["pos"], p["radius"], Color(BG_PARTICLE, p["alpha"] * (0.4 + 0.6 * glow)))
 
 
 func _draw_board() -> void:
@@ -2422,6 +2456,9 @@ func _draw_stones() -> void:
 				continue
 			var center := _cell_to_screen(Vector2i(x, y))
 			var sc := place_scale if Vector2i(x, y) == last_move else 1.0
+			# 获胜连珠：弹性放大后回落（ease-back pop）
+			if winner != 0 and winning_cells.has(Vector2i(x, y)):
+				sc *= 1.0 + 0.22 * sin(clampf(_win_anim, 0.0, 1.0) * PI)
 			var r := _stone_radius() * sc
 
 			# 阴影
