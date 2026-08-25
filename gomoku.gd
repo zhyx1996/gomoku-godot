@@ -442,6 +442,10 @@ func _make_small_button(text: String) -> Button:
 ## 从标题界面进入对局。
 func _start_game(mode: int) -> void:
 	game_mode = mode
+	# 离开标题界面时立即收起彩蛋提示，避免（如解锁提示）跟随进入对局
+	if _toast_label != null:
+		_toast_label.modulate.a = 0.0
+	_toast_until = -1.0
 	if _title_layer != null:
 		_title_layer.queue_free()
 		_title_layer = null
