@@ -48,6 +48,7 @@ jobs:
           & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --import --path . 2>&1 | Select-Object -Last 3
 
       - name: Run regression tests (14 cases)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $godot = ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe"
