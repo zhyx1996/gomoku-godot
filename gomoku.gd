@@ -1644,7 +1644,7 @@ func _classic_turn() -> void:
 		return
 
 	if _classic_ai.taunt != "":
-		_show_toast("嘿嘿（AI 算到必胜）")
+		_show_toast("嘿嘿")
 
 	if winner == 0 and move.x >= 0:
 		if board[move.y][move.x] == 0:
