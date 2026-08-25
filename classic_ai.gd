@@ -51,6 +51,7 @@ func choose_move(board: Array, ai_color: int) -> Vector2i:
 
 ## AI 先手：落天元（对应原 C 程序 mode==2 时的 x=7,y=7）。
 func choose_first() -> Vector2i:
+	@warning_ignore("integer_division")
 	var c := size / 2
 	return Vector2i(c, c)
 

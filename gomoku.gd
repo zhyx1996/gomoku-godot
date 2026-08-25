@@ -1540,7 +1540,7 @@ func _paste_position() -> void:
 		while num_end < cleaned.length() and cleaned[num_end].is_valid_int():
 			num_end += 1
 		if num_end > num_start:
-			var x := cleaned[i].unicode_at(0) - 65
+			var x := letter.unicode_at(0) - 65
 			var y := cleaned.substr(num_start, num_end - num_start).to_int() - 1
 			if x >= 0 and x < board_size and y >= 0 and y < board_size:
 				cells.append(Vector2i(x, y))
@@ -1703,6 +1703,7 @@ func _ai_turn_first() -> void:
 		queue_redraw()
 		await get_tree().process_frame
 		await get_tree().process_frame
+		@warning_ignore("integer_division")
 		var c := board_size / 2
 		ai_thinking = false
 		if not _in_game or gen != _turn_generation:
@@ -2401,7 +2402,9 @@ func _draw_board() -> void:
 	# 星位点（按棋盘大小动态计算，参考 gomoku-calculator 的 starPad 规则）
 	var star_points: Array = []
 	if board_size >= 7:
+		@warning_ignore("integer_division")
 		var star_pad := board_size / 5
+		@warning_ignore("integer_division")
 		var star_center := board_size / 2
 		var far := board_size - 1 - star_pad
 		star_points = [
