@@ -418,11 +418,7 @@ func _parse_info(line: String) -> void:
 		_:
 			return
 
-	if not analysis_callback.is_null():
-		if _on_thread:
-			_emit_analysis.call_deferred(data)
-		else:
-			analysis_callback.call(data)
+	_dispatch_analysis(data)
 
 
 ## 后台线程产生的分析数据经 deferred 回主线程再分发（跨线程直调不安全）。
@@ -443,8 +439,7 @@ func _parse_message(line: String) -> void:
 					"realtime": parts[1],
 					"pos": Vector2i(coord[0].to_int(), coord[1].to_int()),
 				}
-				if not analysis_callback.is_null():
-					analysis_callback.call(data)
+				_dispatch_analysis(data)
 
 
 ## 解析 FORBID 输出（禁手点列表，每点 4 字符：两位 x + 两位 y）。
@@ -459,7 +454,17 @@ func _parse_forbid(line: String) -> void:
 			cells.append(Vector2i(x, y))
 		i += 4
 	if not analysis_callback.is_null():
-		analysis_callback.call({"forbid": cells})
+		_dispatch_analysis({"forbid": cells})
+
+
+## 统一分析回调分发：后台线程产生的一律 deferred 回主线程再调（回调里会动 UI，跨线程直调不安全）。
+func _dispatch_analysis(data: Dictionary) -> void:
+	if analysis_callback.is_null():
+		return
+	if _on_thread:
+		_emit_analysis.call_deferred(data)
+	else:
+		analysis_callback.call(data)
 
 
 ## 请求禁手点：重建局面后 YXSHOWFORBID，引擎会输出 FORBID。

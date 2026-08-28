@@ -142,6 +142,10 @@ var _plaque_ref: PanelContainer = null   # 标题牌匾（入场动画/裁切光
 var _sheen_rect: ColorRect = null        # 牌匾玻璃斜向流光带
 var _win_center: CenterContainer = null  # 胜利卡片响应式居中容器
 var _win_card: PanelContainer = null     # 胜利横幅玻璃卡片
+var _ui_style := 0                       # 界面风格 0=经典 1=流光（重设计的标题界面+紫金配色）
+var _ui_style_button: Button = null      # 设置弹窗「界面风格」按钮
+var _title_glow_colors: Array = [ACCENT_CYAN, Color("bfe9ff")]  # 标题流光字循环色板
+var _threat_origin := Vector2i(-1, -1)   # 触发制胜棋型的落子点（流光折线分组锚点）
 
 # ---- 分析状态（引擎回调更新）----
 var _realtime_best := Vector2i(-1, -1)  # 思考中引擎当前最佳候选点
@@ -195,6 +199,7 @@ const _DIRS := [
 func _ready() -> void:
 	_spawn_bg_particles()
 	_init_audio()
+	_load_settings()
 	_build_title_screen()
 
 
@@ -208,10 +213,18 @@ func _process(delta: float) -> void:
 	# AI 思考中：状态文字动态省略号（等待反馈）
 	if _in_game and ai_thinking and winner == 0 and status_label != null:
 		status_label.text = _status_base + ".".repeat(1 + int(_fx_time * 3.0) % 3)
-	# 标题文字呼吸流光：青 ↔ 冰蓝缓慢往复（仅标题界面存在时）
+	# 标题文字流光：沿色板循环渐变（经典=青↔冰蓝往复；流光=紫→淡紫→金循环）
 	if _title_glow_label != null and is_instance_valid(_title_glow_label):
-		var k := 0.5 + 0.5 * sin(_fx_time * 1.6)
-		_title_glow_label.add_theme_color_override("font_color", ACCENT_CYAN.lerp(Color("bfe9ff"), k))
+		var cols: Array = _title_glow_colors
+		var col: Color
+		if cols.size() >= 3:
+			var t := fposmod(_fx_time * 0.22, 1.0) * float(cols.size())
+			var seg := int(t) % cols.size()
+			col = cols[seg].lerp(cols[(seg + 1) % cols.size()], t - floorf(t))
+		else:
+			var k := 0.5 + 0.5 * sin(_fx_time * 1.6)
+			col = cols[0].lerp(cols[1], k)
+		_title_glow_label.add_theme_color_override("font_color", col)
 	if not _in_game:
 		# 标题界面：只重绘背景粒子
 		queue_redraw()
@@ -314,7 +327,28 @@ func _clear_title_refs() -> void:
 func _build_title_screen() -> void:
 	_title_layer = CanvasLayer.new()
 	add_child(_title_layer)
+	if _ui_style == 1:
+		_build_title_v2()
+	else:
+		_build_title_classic()
+	_add_title_style_switch()
 
+
+## 标题界面右下角「界面风格」切换入口（两套界面各自挂载）。
+func _add_title_style_switch() -> void:
+	var wrap := MarginContainer.new()
+	wrap.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	wrap.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	wrap.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_title_layer.add_child(wrap)
+	var b := _make_small_button("界面：%s ⇄" % ["经典", "流光"][_ui_style])
+	b.pressed.connect(_on_ui_style_pressed)
+	wrap.add_child(b)
+
+
+## 经典标题界面：玻璃牌匾 + 朱砂印章。
+func _build_title_classic() -> void:
+	_title_glow_colors = [ACCENT_CYAN, Color("bfe9ff")]
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_title_layer.add_child(center)
@@ -482,6 +516,128 @@ func _build_title_screen() -> void:
 	box.add_child(credit)
 
 
+## 流光标题界面（新设计）：极光幕帘背景 + 大字流光标题 + 紫金配色菜单。
+func _build_title_v2() -> void:
+	_title_glow_colors = [Color("a78bfa"), Color("e9d5ff"), ACCENT_GOLD]
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_title_layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	center.add_child(box)
+
+	# 入场：整组淡入上浮
+	box.modulate.a = 0.0
+	var intro := box.create_tween()
+	intro.tween_interval(0.05)
+	intro.tween_callback(func(): box.reset_size())
+	intro.tween_property(box, "modulate:a", 1.0, 0.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	# 顶部小字眉题
+	var overline := Label.new()
+	overline.text = "G O M O K U"
+	overline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overline.add_theme_font_size_override("font_size", 13)
+	overline.add_theme_color_override("font_color", Color(_accent2(), 0.85))
+	box.add_child(overline)
+
+	# 主标题（呼吸流光字由 _process 驱动；点击解锁彩蛋）
+	var title := Button.new()
+	title.text = "五子棋"
+	title.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 92)
+	title.add_theme_color_override("font_outline_color", Color(0.05, 0.02, 0.12, 0.9))
+	title.add_theme_constant_override("outline_size", 12)
+	title.add_theme_color_override("font_color", Color("a78bfa"))
+	title.add_theme_color_override("font_hover_color", Color("f3e8ff"))
+	title.add_theme_color_override("font_pressed_color", Color("a78bfa"))
+	_title_glow_label = title
+	_style_ghost_button(title)
+	title.pressed.connect(_on_title_secret_click)
+	box.add_child(title)
+
+	# 分隔饰线：─ ◆ ─
+	var deco_row := HBoxContainer.new()
+	deco_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	deco_row.add_theme_constant_override("separation", 12)
+	box.add_child(deco_row)
+	for side in range(2):
+		var bar := ColorRect.new()
+		bar.color = Color(_accent2(), 0.45)
+		bar.custom_minimum_size = Vector2(86, 1)
+		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		deco_row.add_child(bar)
+		if side == 0:
+			var gem := Label.new()
+			gem.text = "◆"
+			gem.add_theme_font_size_override("font_size", 11)
+			gem.add_theme_color_override("font_color", Color(_accent2(), 0.9))
+			deco_row.add_child(gem)
+
+	# 副标语（彩蛋解锁提示会改写）
+	var sub := Label.new()
+	sub.text = "五子连珠 · 妙手对弈"
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_color_override("font_color", Color("b3a5d8"))
+	box.add_child(sub)
+	_subtitle_label = sub
+
+	var sub_note := Label.new()
+	sub_note.text = ""
+	sub_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub_note.add_theme_font_size_override("font_size", 11)
+	sub_note.add_theme_color_override("font_color", Color("8f86ad"))
+	box.add_child(sub_note)
+	_subtitle_note = sub_note
+
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 20)
+	box.add_child(gap)
+
+	# 主 CTA：紫罗兰实心 + 辉光投影
+	var pve := _make_menu_button("人机对战")
+	pve.custom_minimum_size = Vector2(300, 52)
+	pve.add_theme_font_size_override("font_size", 17)
+	_style_primary_button(pve)
+	pve.pressed.connect(func(): _start_game(GameMode.PVE))
+	box.add_child(pve)
+
+	var diff_row := HBoxContainer.new()
+	diff_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_child(diff_row)
+	var difficulty_btn := _make_small_button(_difficulty_label() + " ▾")
+	difficulty_btn.pressed.connect(func(): _show_difficulty_menu(difficulty_btn))
+	diff_row.add_child(difficulty_btn)
+	_title_difficulty_button = difficulty_btn
+
+	var pvp := _make_menu_button("双人对战")
+	pvp.custom_minimum_size = Vector2(300, 48)
+	pvp.pressed.connect(func(): _start_game(GameMode.PVP))
+	box.add_child(pvp)
+
+	var eve := _make_menu_button("！？机机？！对战")
+	eve.custom_minimum_size = Vector2(300, 48)
+	eve.pressed.connect(func(): _start_game(GameMode.EVE))
+	eve.visible = _dlc_unlocked
+	box.add_child(eve)
+	_title_eve_button = eve
+
+	var settings_btn := _make_menu_button("设置")
+	settings_btn.custom_minimum_size = Vector2(300, 48)
+	settings_btn.pressed.connect(_open_settings)
+	_style_ghost_outline_button(settings_btn)
+	box.add_child(settings_btn)
+
+	var credit := Label.new()
+	credit.text = "Rapfi AI · NNUE 神经网络"
+	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	credit.add_theme_font_size_override("font_size", 11)
+	credit.add_theme_color_override("font_color", Color("7d7398"))
+	box.add_child(credit)
+
+
 func _make_menu_button(text: String) -> Button:
 	var b := _make_button()
 	b.text = text
@@ -618,14 +774,14 @@ func _show_difficulty_menu(anchor: Button) -> void:
 		b.add_theme_font_size_override("font_size", 13)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		if id == current:
-			# 选中项：朱砂底纹 + 左侧强调条 + 勾选 + 朱砂文字
+			# 选中项：底纹 + 左侧强调条 + 勾选 + 强调色文字
 			b.text = "✓  " + str(opt["label"])
-			b.add_theme_color_override("font_color", Color("8fdcff"))
-			b.add_theme_color_override("font_hover_color", Color("8fdcff"))
+			b.add_theme_color_override("font_color", _toggle_text_color())
+			b.add_theme_color_override("font_hover_color", _toggle_text_color())
 			b.add_theme_color_override("font_pressed_color", Color("ffffff"))
 			var sel := StyleBoxFlat.new()
 			sel.bg_color = Color(0.20, 0.32, 0.55, 0.6)
-			sel.border_color = Color(0.32, 0.78, 0.99, 0.8)
+			sel.border_color = Color(_accent(), 0.8)
 			sel.set_border_width_all(0)
 			sel.border_width_left = 3
 			sel.set_corner_radius_all(12)
@@ -682,11 +838,11 @@ func _set_difficulty_open(open_: bool) -> void:
 		return
 	if open_:
 		var s := _make_flat_style()
-		s.border_color = ACCENT_CYAN
+		s.border_color = _accent()
 		_difficulty_anchor.add_theme_stylebox_override("normal", s)
 		var h := _make_flat_style()
 		h.bg_color = Color(0.16, 0.23, 0.38, 0.72)
-		h.border_color = ACCENT_CYAN
+		h.border_color = _accent()
 		_difficulty_anchor.add_theme_stylebox_override("hover", h)
 	else:
 		_apply_button_styles(_difficulty_anchor)
@@ -727,6 +883,7 @@ func _on_difficulty_option(id: int) -> void:
 		ai_difficulty = id
 	_refresh_buttons()
 	_update_title_difficulty()
+	_save_settings()
 	if _in_game:
 		_new_game()
 
@@ -741,8 +898,8 @@ func _build_ui() -> void:
 	panel.size = SIDE_PANEL_SIZE
 	canvas_layer.add_child(panel)
 	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.07, 0.10, 0.17, 0.78)
-	panel_style.border_color = Color(0.30, 0.42, 0.68, 0.4)
+	panel_style.bg_color = Color(0.10, 0.08, 0.18, 0.80) if _ui_style == 1 else Color(0.07, 0.10, 0.17, 0.78)
+	panel_style.border_color = Color(0.55, 0.45, 0.85, 0.42) if _ui_style == 1 else Color(0.30, 0.42, 0.68, 0.4)
 	panel_style.set_border_width_all(1)
 	panel_style.set_corner_radius_all(14)
 	panel_style.shadow_color = Color(0.08, 0.30, 0.55, 0.35)
@@ -885,8 +1042,8 @@ func _build_settings_popup() -> void:
 	_settings_popup = PopupPanel.new()
 	_settings_popup.title = "设置"
 	var ps := StyleBoxFlat.new()
-	ps.bg_color = Color(0.08, 0.11, 0.18, 0.96)
-	ps.border_color = Color(0.30, 0.45, 0.72, 0.5)
+	ps.bg_color = Color(0.11, 0.09, 0.19, 0.96) if _ui_style == 1 else Color(0.08, 0.11, 0.18, 0.96)
+	ps.border_color = Color(0.55, 0.45, 0.85, 0.5) if _ui_style == 1 else Color(0.30, 0.45, 0.72, 0.5)
 	ps.set_border_width_all(1)
 	ps.set_corner_radius_all(14)
 	ps.shadow_color = Color(0.08, 0.30, 0.55, 0.35)
@@ -979,6 +1136,9 @@ func _build_settings_popup() -> void:
 	fx_button = _make_button()
 	fx_button.pressed.connect(_on_fx_pressed)
 	display_grid.add_child(fx_button)
+	_ui_style_button = _make_button()
+	_ui_style_button.pressed.connect(_on_ui_style_pressed)
+	layout.add_child(_ui_style_button)
 	theme_button = _make_button()
 	theme_button.pressed.connect(_on_theme_pressed)
 	layout.add_child(theme_button)
@@ -1000,7 +1160,7 @@ func _section_label(text: String) -> Label:
 	lbl.custom_minimum_size = Vector2(0, 24)
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	lbl.add_theme_font_size_override("font_size", 12)
-	lbl.add_theme_color_override("font_color", Color("6fb8e8"))
+	lbl.add_theme_color_override("font_color", _section_color())
 	return lbl
 
 
@@ -1021,11 +1181,11 @@ func _style_ghost_outline_button(b: Button) -> void:
 	b.add_theme_stylebox_override("normal", normal)
 	var hover := _make_flat_style()
 	hover.bg_color = Color(0.14, 0.20, 0.34, 0.6)
-	hover.border_color = Color(0.32, 0.78, 0.99, 0.5)
+	hover.border_color = Color(_accent(), 0.5)
 	b.add_theme_stylebox_override("hover", hover)
 	var pressed := _make_flat_style()
 	pressed.bg_color = Color(0.10, 0.15, 0.25, 0.7)
-	pressed.border_color = Color(0.32, 0.78, 0.99, 0.6)
+	pressed.border_color = Color(_accent(), 0.6)
 	b.add_theme_stylebox_override("pressed", pressed)
 	b.add_theme_color_override("font_color", Color("c3cfe2"))
 	b.add_theme_color_override("font_hover_color", Color("ffffff"))
@@ -1048,7 +1208,7 @@ func _make_button() -> Button:
 func _make_flat_style() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.10, 0.14, 0.22, 0.55)
-	s.border_color = Color(0.40, 0.55, 0.85, 0.28)
+	s.border_color = Color(_accent(), 0.28)
 	s.set_border_width_all(1)
 	s.set_corner_radius_all(10)
 	s.content_margin_left = 14
@@ -1064,11 +1224,11 @@ func _apply_button_styles(b: Button) -> void:
 	b.add_theme_stylebox_override("normal", normal)
 	var hover := _make_flat_style()
 	hover.bg_color = Color(0.16, 0.23, 0.38, 0.72)
-	hover.border_color = Color(0.32, 0.78, 0.99, 0.65)
+	hover.border_color = Color(_accent(), 0.65)
 	b.add_theme_stylebox_override("hover", hover)
 	var pressed := _make_flat_style()
 	pressed.bg_color = Color(0.12, 0.18, 0.30, 0.9)
-	pressed.border_color = Color(0.32, 0.78, 0.99, 0.9)
+	pressed.border_color = Color(_accent(), 0.9)
 	b.add_theme_stylebox_override("pressed", pressed)
 	var focus := StyleBoxFlat.new()
 	focus.bg_color = Color(0, 0, 0, 0)
@@ -1087,26 +1247,31 @@ func _apply_button_styles(b: Button) -> void:
 	b.add_theme_color_override("font_disabled_color", Color("5b6474"))
 
 
-## 主操作按钮（如「新局」）：实心朱砂，层级高于普通按钮。
+## 主操作按钮（如「新局」「人机对战」）：实心强调色，层级高于普通按钮。
 func _style_primary_button(b: Button) -> void:
 	b.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var base := Color("7c3aed") if _ui_style == 1 else Color("0ea5e9")
+	var base_hover := Color("a78bfa") if _ui_style == 1 else Color("38bdf8")
+	var base_pressed := Color("6d28d9") if _ui_style == 1 else Color("0284c7")
+	var border := Color("ddd6fe") if _ui_style == 1 else Color("7dd3fc")
+	var border_hover := Color("f5f3ff") if _ui_style == 1 else Color("bae6fd")
 	var normal := _make_flat_style()
-	normal.bg_color = Color("0ea5e9")
-	normal.border_color = Color("7dd3fc")
+	normal.bg_color = base
+	normal.border_color = border
 	normal.set_corner_radius_all(12)
-	normal.shadow_color = Color(0.22, 0.60, 0.96, 0.35)
-	normal.shadow_size = 9
+	normal.shadow_color = Color(base, 0.45)
+	normal.shadow_size = 10
 	b.add_theme_stylebox_override("normal", normal)
 	var hover := _make_flat_style()
-	hover.bg_color = Color("38bdf8")
-	hover.border_color = Color("bae6fd")
+	hover.bg_color = base_hover
+	hover.border_color = border_hover
 	hover.set_corner_radius_all(12)
-	hover.shadow_color = Color(0.30, 0.72, 0.98, 0.5)
-	hover.shadow_size = 12
+	hover.shadow_color = Color(base_hover, 0.55)
+	hover.shadow_size = 14
 	b.add_theme_stylebox_override("hover", hover)
 	var pressed := _make_flat_style()
-	pressed.bg_color = Color("0284c7")
-	pressed.border_color = Color("38bdf8")
+	pressed.bg_color = base_pressed
+	pressed.border_color = base_hover
 	pressed.set_corner_radius_all(12)
 	b.add_theme_stylebox_override("pressed", pressed)
 	var disabled := _make_flat_style()
@@ -1127,10 +1292,10 @@ func _style_toggle_state(b: Button, enabled: bool) -> void:
 		return
 	var selected := _make_flat_style()
 	selected.bg_color = Color(0.20, 0.32, 0.55, 0.6)
-	selected.border_color = Color(0.32, 0.78, 0.99, 0.8)
+	selected.border_color = Color(_accent(), 0.8)
 	selected.border_width_left = 3
 	b.add_theme_stylebox_override("normal", selected)
-	b.add_theme_color_override("font_color", Color("8fdcff"))
+	b.add_theme_color_override("font_color", _toggle_text_color())
 
 
 func _refresh_buttons() -> void:
@@ -1159,7 +1324,7 @@ func _refresh_buttons() -> void:
 		show_coord_button.text = "坐标：%s" % ("开" if _show_coord else "关")
 	if fx_button:
 		fx_button.text = "动效：%s" % ("减弱" if _reduced_fx else "完整")
-		_style_toggle_state(show_coord_button, _show_coord)
+		_style_toggle_state(fx_button, not _reduced_fx)
 	if show_index_button:
 		show_index_button.text = "序号：%s" % ("开" if _show_index else "关")
 		_style_toggle_state(show_index_button, _show_index)
@@ -1171,6 +1336,8 @@ func _refresh_buttons() -> void:
 		_style_toggle_state(show_eval_button, _show_eval)
 	if theme_button:
 		theme_button.text = "主题：%s" % ["深色", "木质", "浅色"][_theme_index]
+	if _ui_style_button:
+		_ui_style_button.text = "界面风格：%s" % ["经典", "流光"][_ui_style]
 	if threads_button:
 		var thread_names: Array = ["自动", "1", "2", "4", "8"]
 		var thread_opts: Array = [0, 1, 2, 4, 8]
@@ -1253,6 +1420,7 @@ func _on_rule_pressed() -> void:
 		ai.set_config("rule", _rule_index)
 	_refresh_buttons()
 	_new_game()
+	_save_settings()
 
 
 func _on_board_size_pressed() -> void:
@@ -1265,6 +1433,7 @@ func _on_board_size_pressed() -> void:
 		ai.new_game()
 	_refresh_buttons()
 	_new_game()
+	_save_settings()
 
 
 func _on_think_time_pressed() -> void:
@@ -1274,6 +1443,7 @@ func _on_think_time_pressed() -> void:
 	if ai != null:
 		ai.set_config("timeout_turn", timeouts[_think_time_index])
 	_refresh_buttons()
+	_save_settings()
 
 
 func _on_cand_range_pressed() -> void:
@@ -1287,24 +1457,28 @@ func _on_show_coord_pressed() -> void:
 	_show_coord = not _show_coord
 	_refresh_buttons()
 	queue_redraw()
+	_save_settings()
 
 
 func _on_show_index_pressed() -> void:
 	_show_index = not _show_index
 	_refresh_buttons()
 	queue_redraw()
+	_save_settings()
 
 
 func _on_show_winline_pressed() -> void:
 	_show_winline = not _show_winline
 	_refresh_buttons()
 	queue_redraw()
+	_save_settings()
 
 
 func _on_show_eval_pressed() -> void:
 	_show_eval = not _show_eval
 	_refresh_buttons()
 	queue_redraw()
+	_save_settings()
 
 
 func _on_theme_pressed() -> void:
@@ -1312,6 +1486,94 @@ func _on_theme_pressed() -> void:
 	_apply_theme()
 	_refresh_buttons()
 	queue_redraw()
+	_save_settings()
+
+
+func _on_ui_style_pressed() -> void:
+	_ui_style = 1 - _ui_style
+	_save_settings()
+	_apply_ui_style()
+	_refresh_buttons()
+
+
+## 切换界面风格后重建当前界面（标题层或对局 UI），保证强调色立即生效。
+func _apply_ui_style() -> void:
+	if _difficulty_menu != null:
+		_difficulty_menu.queue_free()
+		_difficulty_menu = null
+		_difficulty_anchor = null
+	if _in_game:
+		_rebuild_game_ui()
+	else:
+		if _title_layer != null:
+			_clear_title_refs()
+			_title_layer.queue_free()
+			_title_layer = null
+		_build_title_screen()
+	queue_redraw()
+
+
+## 就地重建对局 UI（不重置棋局）。
+func _rebuild_game_ui() -> void:
+	_hide_win_banner()
+	if _difficulty_menu != null:
+		_difficulty_menu.queue_free()
+		_difficulty_menu = null
+		_difficulty_anchor = null
+	if _settings_popup != null:
+		_settings_popup.queue_free()
+		_settings_popup = null
+	if _game_ui_layer != null:
+		_game_ui_layer.queue_free()
+		_game_ui_layer = null
+	_build_ui()
+	_build_settings_popup()
+	_update_status_text()
+	_update_analysis_display()
+	if winner != 0:
+		_show_win_banner()
+
+
+# ============================================================
+# 设置持久化（user://settings.cfg）
+# ============================================================
+const SETTINGS_PATH := "user://settings.cfg"
+
+
+func _load_settings() -> void:
+	var cf := ConfigFile.new()
+	if cf.load(SETTINGS_PATH) != OK:
+		return
+	_ui_style = clampi(int(cf.get_value("ui", "style", 0)), 0, 1)
+	_theme_index = clampi(int(cf.get_value("ui", "theme", 0)), 0, 2)
+	_reduced_fx = bool(cf.get_value("ui", "reduced_fx", false))
+	_rule_index = clampi(int(cf.get_value("game", "rule", 0)), 0, 2)
+	var bs := int(cf.get_value("game", "board_size", 15))
+	if [5, 9, 11, 13, 15, 17, 19].has(bs):
+		board_size = bs
+	ai_difficulty = clampi(int(cf.get_value("game", "difficulty", 1)), 0, 2)
+	_think_time_index = clampi(int(cf.get_value("engine", "think_time", 1)), 0, 3)
+	_show_coord = bool(cf.get_value("display", "coord", true))
+	_show_index = bool(cf.get_value("display", "index", false))
+	_show_winline = bool(cf.get_value("display", "winline", true))
+	_show_eval = bool(cf.get_value("display", "eval", false))
+	_apply_theme()
+
+
+func _save_settings() -> void:
+	var cf := ConfigFile.new()
+	cf.set_value("ui", "style", _ui_style)
+	cf.set_value("ui", "theme", _theme_index)
+	cf.set_value("ui", "reduced_fx", _reduced_fx)
+	cf.set_value("game", "rule", _rule_index)
+	cf.set_value("game", "board_size", board_size)
+	cf.set_value("game", "difficulty", ai_difficulty)
+	cf.set_value("engine", "think_time", _think_time_index)
+	cf.set_value("display", "coord", _show_coord)
+	cf.set_value("display", "index", _show_index)
+	cf.set_value("display", "winline", _show_winline)
+	cf.set_value("display", "eval", _show_eval)
+	cf.save(SETTINGS_PATH)
 
 
 func _on_threads_pressed() -> void:
@@ -1357,6 +1619,29 @@ func _on_ai_white_pressed() -> void:
 	_ai_white = not _ai_white
 	_refresh_buttons()
 	_new_game()
+
+
+# ============================================================
+# 界面风格（经典 / 流光）：强调色与面板底色随风格切换
+# ============================================================
+## 主强调色（悬停/选中描边、流光元素）：经典=电光青，流光=紫罗兰。
+func _accent() -> Color:
+	return Color("c084fc") if _ui_style == 1 else ACCENT_CYAN
+
+
+## 点缀金。
+func _accent2() -> Color:
+	return ACCENT_GOLD
+
+
+## 分区小标题颜色。
+func _section_color() -> Color:
+	return Color("b39ddb") if _ui_style == 1 else Color("6fb8e8")
+
+
+## 开关类按钮选中态文字色。
+func _toggle_text_color() -> Color:
+	return Color("d8b4fe") if _ui_style == 1 else Color("8fdcff")
 
 
 ## 应用主题配色（0深色 / 1木质 / 2浅色）。
@@ -1407,6 +1692,7 @@ func _on_undo_pressed() -> void:
 	winner = 0
 	_threat_cells.clear()
 	_threat_type = ""
+	_threat_origin = Vector2i(-1, -1)
 	_attack_cells.clear()
 	_attack_type = ""
 	_attack_time = -1.0
@@ -1435,6 +1721,7 @@ func _apply_stop_undo() -> void:
 		winner = 0
 		_threat_cells.clear()
 		_threat_type = ""
+		_threat_origin = Vector2i(-1, -1)
 		_attack_cells.clear()
 		_attack_type = ""
 		_attack_time = -1.0
@@ -1503,6 +1790,7 @@ func _new_game() -> void:
 	ai_thinking = false
 	_threat_cells.clear()
 	_threat_type = ""
+	_threat_origin = Vector2i(-1, -1)
 	_attack_cells.clear()
 	_attack_type = ""
 	_attack_time = -1.0
@@ -1860,8 +2148,9 @@ func _on_fx_pressed() -> void:
 	_reduced_fx = not _reduced_fx
 	if _reduced_fx:
 		_confetti.clear()
-		queue_redraw()
+	queue_redraw()
 	_refresh_buttons()
+	_save_settings()
 
 
 func _player_name(player: int) -> String:
@@ -1983,6 +2272,7 @@ func _detect_threat_fx(cell: Vector2i) -> void:
 	_threat_cells = r["threat_cells"]
 	_attack_type = r["attack_type"]
 	_attack_cells = r["attack_cells"]
+	_threat_origin = cell  # 流光折线的分组锚点
 	if _attack_type != "":
 		_attack_time = _fx_time
 
@@ -2461,6 +2751,34 @@ func _draw_background() -> void:
 		for p in _bg_particles:
 			var glow := 0.5 + 0.5 * sin(_fx_time * 0.8 + p["phase"])
 			draw_circle(p["pos"], p["radius"], Color(BG_PARTICLE, p["alpha"] * (0.4 + 0.6 * glow)))
+	# 流光界面：标题幕帘极光
+	if _ui_style == 1 and not _in_game:
+		_draw_aurora(size)
+
+
+## 极光幕帘：三条缓慢流动的正弦光带（低透明度叠加，作流光标题的背景签名）。
+func _draw_aurora(size: Vector2) -> void:
+	if _reduced_fx:
+		return
+	var ribbons := [
+		{"base": 0.30, "amp": 46.0, "freq": 2.1, "speed": 0.35, "color": Color("7c3aed"), "width": 92.0, "alpha": 0.055},
+		{"base": 0.38, "amp": 62.0, "freq": 1.4, "speed": -0.25, "color": Color("38bdf8"), "width": 72.0, "alpha": 0.045},
+		{"base": 0.24, "amp": 34.0, "freq": 2.8, "speed": 0.50, "color": ACCENT_GOLD, "width": 48.0, "alpha": 0.035},
+	]
+	for rb in ribbons:
+		var pts := PackedVector2Array()
+		var base_y := size.y * float(rb["base"])
+		var amp := float(rb["amp"])
+		var freq := float(rb["freq"])
+		var speed := float(rb["speed"])
+		for i in range(49):
+			var u := float(i) / 48.0
+			var x := u * size.x
+			var y := base_y \
+				+ sin(u * freq * TAU + _fx_time * speed) * amp \
+				+ sin(u * freq * 1.7 * TAU - _fx_time * speed * 0.6) * amp * 0.4
+			pts.append(Vector2(x, y))
+		draw_polyline(pts, Color(rb["color"], float(rb["alpha"])), float(rb["width"]))
 
 
 func _draw_board() -> void:
@@ -2664,11 +2982,11 @@ func _draw_confetti() -> void:
 		var pos: Vector2 = c["pos"]
 		var col: Color = c["color"]
 		var rot: float = c["rot"]
-		var half := Vector2(s * 0.5, s * 0.25).rotated(rot)
-		draw_colored_polygon(PackedVector2Array([
-			pos - half, pos + Vector2(half.x, -half.y),
-			pos + half, pos + Vector2(-half.x, half.y),
-		]), col)
+		# 用变换绘制本地矩形：旧写法把旋转后的四角放到世界坐标再三角化，
+		# 旋转接近竖直时 half.x≈0 会退化成细缝导致 triangulation failed（彩带消失+刷错误）
+		draw_set_transform(pos, rot, Vector2.ONE)
+		draw_rect(Rect2(-s * 0.5, -s * 0.25, s, s * 0.5), col)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 func _draw_forbid() -> void:
@@ -2693,33 +3011,118 @@ func _draw_realtime() -> void:
 		draw_circle(_cell_to_screen(c), 3.0, Color("f87171", 0.45))
 
 
+## 制胜棋型高亮：流光沿棋型折线循环流动。
+## 顺滑呼吸底光 + 亮核心线 + 彗星拖尾光带；四三/双三两条线各自错相位流动。
 func _draw_threat_highlight() -> void:
 	if _threat_cells.is_empty():
 		return
 
 	var color := Color("f87171")  # 亮红，最威胁
-	if _threat_type == "open_four":
-		color = ACCENT_GOLD
-	elif _threat_type == "double_four":
-		color = Color("f87171")
-	elif _threat_type == "four_three":
-		color = Color("f87171")
-	elif _threat_type == "double_three":
-		color = Color("fb923c")  # 橙
+	match _threat_type:
+		"open_four":
+			color = ACCENT_GOLD
+		"double_four":
+			color = Color("f87171")
+		"four_three":
+			color = Color("f87171")
+		"double_three":
+			color = Color("fb923c")  # 橙
 
-	# 脉冲强度随时间正弦变化
-	var pulse := 0.5 + 0.5 * sin(_fx_time * 6.0)
+	var paths := _threat_paths(_threat_cells)
+	if paths.is_empty():
+		# 无法连成折线（兜底）：退化为柔和呼吸光晕
+		var breath := 0.5 + 0.5 * sin(_fx_time * 2.2)
+		for c in _threat_cells:
+			draw_circle(_cell_to_screen(c), _stone_radius() + 3.0 + breath * 3.0, Color(color, 0.12 + 0.12 * breath))
+		return
+	for i in range(paths.size()):
+		var phase := _fx_time * 0.55 + float(i) * 0.5
+		_draw_flow_line(paths[i], color, phase, _stone_radius())
 
-	for c in _threat_cells:
-		var center := _cell_to_screen(c)
-		# 光晕环
-		var glow_radius := _stone_radius() + 3.0 + pulse * 4.0
-		draw_arc(center, glow_radius, 0.0, TAU, 48, Color(color, 0.8), 3.0, true)
-		# 内圈闪烁
-		draw_circle(center, 3.0, Color(color, 0.5 + 0.5 * pulse))
+
+## 把棋型格子按所在直线分组、沿方向排序成世界坐标折线。
+## 交点（触发落子）归入每条线；某方向不足 2 子则不成线。
+func _threat_paths(cells: Array) -> Array:
+	var paths: Array = []
+	if _threat_origin.x < 0:
+		return paths
+	for dir in _DIRS:
+		var members: Array = []
+		for c in cells:
+			if c == _threat_origin:
+				members.append(c)
+				continue
+			var d: Vector2i = c - _threat_origin
+			if d.x * dir.y - d.y * dir.x == 0:  # 与 dir 共线（含反向）
+				members.append(c)
+		if members.size() < 2:
+			continue
+		members.sort_custom(func(a, b):
+			var pa: Vector2i = a - _threat_origin
+			var pb: Vector2i = b - _threat_origin
+			return pa.x * dir.x + pa.y * dir.y < pb.x * dir.x + pb.y * dir.y)
+		var pts: Array[Vector2] = []
+		for c in members:
+			pts.append(_cell_to_screen(c))
+		paths.append(pts)
+	return paths
 
 
-## 进攻棋型（活三/冲四）延迟几秒后显示不明显的特效。
+## 沿折线绘制流光：贯穿整线的呼吸底光 + 彗星拖尾光带 + 头部亮斑 + 端点辉光。
+## phase 单位为「圈」（自动循环）；折线两端向外延长，让光带看起来贯穿棋型。
+func _draw_flow_line(pts: Array, color: Color, phase: float, base_r: float) -> void:
+	if pts.size() < 2:
+		return
+	var a: Vector2 = pts[0] + (pts[0] - pts[1]).normalized() * base_r * 0.8
+	var b: Vector2 = pts[pts.size() - 1] + (pts[pts.size() - 1] - pts[pts.size() - 2]).normalized() * base_r * 0.8
+	var poly := PackedVector2Array([a])
+	for p in pts:
+		poly.append(p)
+	poly.append(b)
+	# 弧长表（把折线参数化为 0~1）
+	var cum := PackedFloat32Array()
+	cum.resize(poly.size())
+	cum[0] = 0.0
+	var total := 0.0
+	for i in range(1, poly.size()):
+		total += poly[i - 1].distance_to(poly[i])
+		cum[i] = total
+	if total <= 0.0:
+		return
+	# 1) 呼吸底光：宽而淡的顺滑衬底
+	var breath := 0.5 + 0.5 * sin(_fx_time * 2.2)
+	draw_polyline(poly, Color(color, 0.10 + 0.08 * breath), base_r * 1.55)
+	draw_polyline(poly, Color(color, 0.16 + 0.10 * breath), base_r * 0.62)
+	# 2) 彗星流光：头部亮、拖尾按平方衰减渐隐
+	var head := fposmod(phase, 1.0)
+	var tail := 0.38  # 拖尾长度占整线比例
+	var steps := 26
+	var head_pos := _sample_poly(poly, cum, total, head)
+	var prev := head_pos
+	for i in range(1, steps + 1):
+		var u := fposmod(head - tail * float(i) / float(steps), 1.0)
+		var p := _sample_poly(poly, cum, total, u)
+		var k := 1.0 - float(i) / float(steps)
+		draw_line(prev, p, Color(color, k * k * 0.85), lerpf(2.0, base_r * 0.45, k), true)
+		prev = p
+	# 3) 头部亮斑与端点辉光
+	draw_circle(head_pos, base_r * 0.34, Color(color.lerp(Color.WHITE, 0.55), 0.9))
+	draw_circle(poly[0], base_r * 0.30, Color(color, 0.5))
+	draw_circle(poly[poly.size() - 1], base_r * 0.30, Color(color, 0.5))
+
+
+## 按弧长比例取折线上的一点（u ∈ 0~1）。
+func _sample_poly(poly: PackedVector2Array, cum: PackedFloat32Array, total: float, u: float) -> Vector2:
+	var target := clampf(u, 0.0, 1.0) * total
+	for i in range(1, poly.size()):
+		if cum[i] >= target:
+			var seg := cum[i] - cum[i - 1]
+			var k := 0.0 if seg <= 0.0 else (target - cum[i - 1]) / seg
+			return poly[i - 1].lerp(poly[i], k)
+	return poly[poly.size() - 1]
+
+
+## 进攻棋型（活三/冲四）延迟几秒后显示不明显的特效：呼吸细环 + 缓慢巡游的旋转短弧。
 func _draw_attack_highlight() -> void:
 	if _attack_cells.is_empty() or _attack_time < 0.0:
 		return
@@ -2729,10 +3132,12 @@ func _draw_attack_highlight() -> void:
 	if _attack_type == "rushed_four":
 		color = ACCENT_MAGENTA
 	# 轻微的呼吸，透明度低
-	var pulse := 0.5 + 0.5 * sin(_fx_time * 3.0)
+	var breath := 0.5 + 0.5 * sin(_fx_time * 2.0)
+	var spin := _fx_time * 1.2
 	for c in _attack_cells:
 		var center := _cell_to_screen(c)
-		draw_arc(center, _stone_radius() + 2.0, 0.0, TAU, 48, Color(color, 0.22 + 0.10 * pulse), 1.5, true)
+		draw_arc(center, _stone_radius() + 2.5, 0.0, TAU, 48, Color(color, 0.16 + 0.08 * breath), 1.5, true)
+		draw_arc(center, _stone_radius() + 2.5, spin, spin + 0.9, 16, Color(color, 0.45), 2.0, true)
 
 
 func _draw_overlays() -> void:
@@ -2743,7 +3148,7 @@ func _draw_overlays() -> void:
 		draw_circle(center, 3.2 * pulse, LAST_MOVE_COLOR)
 		draw_arc(center, 5.0, 0.0, TAU, 32, Color("ffffff", 0.8), 1.2, true)
 
-	# 胜利连线（金色描边 + 内部发光）
+	# 胜利连线（翠绿发光衬底 + 金色彗星沿连珠循环巡游）
 	if _show_winline and winning_cells.size() >= 2:
 		var start_cell: Vector2i = winning_cells[0]
 		var end_cell: Vector2i = winning_cells[winning_cells.size() - 1]
@@ -2751,6 +3156,10 @@ func _draw_overlays() -> void:
 		var e := _cell_to_screen(end_cell)
 		draw_line(s, e, Color(WIN_LINE_COLOR, 0.4), 12.0)
 		draw_line(s, e, WIN_LINE_COLOR, 5.0)
+		var win_pts: Array[Vector2] = []
+		for c in winning_cells:
+			win_pts.append(_cell_to_screen(c))
+		_draw_flow_line(win_pts, ACCENT_GOLD, _fx_time * 0.35, _cell_size() * 0.16)
 		# 两端闪光
 		draw_circle(s, 7.0, ACCENT_GOLD)
 		draw_circle(e, 7.0, ACCENT_GOLD)

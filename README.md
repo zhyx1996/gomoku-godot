@@ -7,8 +7,9 @@
 - 🎮 人人对战 / 人机对战（可调难度，AI 思考可中断）
 - 🧠 强 AI：内置 [Rapfi](https://github.com/dhbloo/rapfi) NNUE 引擎（Piskvork 协议，自动选择 SSE/AVX2/AVX512 指令集）
 - 📏 规则：Freestyle（无禁手）/ Standard（黑长连禁）/ Renju（黑三三、四四、长连禁手）
-- ✨ 制胜棋型识别：活四、双冲四、四三、双活三自动高亮提示
-- 🎨 三套主题：星夜（默认）、木质、浅色；落子动画、胜利彩带粒子
+- ✨ 制胜棋型识别：活四、双冲四、四三、双活三自动触发「流光」特效（彗星光带沿棋型循环流动）
+- 🎨 三套主题：星夜（默认）、木质、浅色；两套界面风格：经典 / 流光（紫金极光标题，可随时切换）
+- 💾 设置持久化：界面风格、主题、规则、棋盘、难度、思考档位等自动保存（user://settings.cfg）
 - 🌐 支持 Web 导出（SharedArrayBuffer 跨域隔离）
 
 ## 目录结构
@@ -41,6 +42,11 @@ godot --headless --script tests/threat_test.gd --path .
 ```
 
 14 个用例覆盖活三/跳活三/活四/冲四/双四/四三/双三及 Renju 禁手回落行为。
+
+视觉与冒烟验收（需窗口环境，产物在 `screenshots/`）：
+
+```bash
+godot --path . --script tests/screenshot_driver.gd   # 自动驱动标题/棋型流光/胜利特效并截图
 
 ## Web 导出
 
