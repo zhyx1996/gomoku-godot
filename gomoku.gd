@@ -163,6 +163,8 @@ var _threat_origin := Vector2i(-1, -1)   # 触发制胜棋型的落子点（流�
 var _win_sparks: Array = []              # 获胜火花粒子（拖尾光点，带重力）
 var _shake_start := -1.0                 # 胜利震屏起始时刻（<0 关闭）
 var _win_sheen: ColorRect = null         # 胜利卡片玻璃扫光带
+var _win_emblem: Control = null          # 获胜徽章（获胜方棋子，每帧重绘）
+var _win_sub: Label = null               # 胜利卡片副文字（共 N 手）
 var _side_panel: PanelContainer = null   # 对局侧栏（窗口尺寸变化时重新定位）
 const WIN_SHAKE_DUR := 0.32              # 震屏时长
 
@@ -230,6 +232,15 @@ func _process(delta: float) -> void:
 	if _analysis_dirty and _in_game:
 		_analysis_dirty = false
 		_update_analysis_display()
+	# 胜利卡片：徽章呼吸重绘 + 标题金光循环
+	if _win_emblem != null and is_instance_valid(_win_emblem):
+		if not _reduced_fx:
+			_win_emblem.queue_redraw()
+	if _win_label != null and is_instance_valid(_win_label) and winner != 0:
+		var wcols := [ACCENT_GOLD, Color("ffe9a8"), Color("fff6e0")]
+		var wt := fposmod(_fx_time * 0.3, 1.0) * float(wcols.size())
+		var wseg := int(wt) % wcols.size()
+		_win_label.add_theme_color_override("font_color", wcols[wseg].lerp(wcols[(wseg + 1) % wcols.size()], wt - floorf(wt)))
 	# 胜利连珠：弹性放大后回落（短暂夸张并回归静止）
 	if _in_game and winner != 0 and _win_anim < 1.0:
 		_win_anim = minf(_win_anim + delta * 2.2, 1.0)
@@ -2592,6 +2603,31 @@ func _spawn_win_sparks() -> void:
 			})
 
 
+## 获胜徽章绘制：获胜方棋子（平局为灰）+ 呼吸金环 + 高光（Control.draw 回调）。
+func _draw_win_emblem(em: Control) -> void:
+	var c := em.size / 2.0
+	if c.y <= 1.0:
+		return
+	var breath := 0.75 if _reduced_fx else 0.5 + 0.5 * sin(_fx_time * 2.4)
+	# 光晕
+	em.draw_circle(c, 44.0 + 6.0 * breath, Color(ACCENT_GOLD, 0.10 + 0.06 * breath))
+	# 阴影 + 棋子（扁椭圆，与标题装饰棋盘同款）
+	em.draw_set_transform(c + Vector2(0, 5), 0.0, Vector2(1.0, 0.78))
+	em.draw_circle(Vector2.ZERO, 30.0, Color(0, 0, 0, 0.4))
+	em.draw_set_transform(c, 0.0, Vector2(1.0, 0.78))
+	var stone := Color(0.93, 0.95, 1.0)
+	if winner == 1:
+		stone = Color(0.08, 0.10, 0.16)
+	elif winner == 3:
+		stone = Color(0.55, 0.58, 0.66)
+	em.draw_circle(Vector2.ZERO, 30.0, stone)
+	if winner == 1:
+		em.draw_arc(Vector2.ZERO, 29.0, 0.0, TAU, 48, Color(0.55, 0.6, 0.75, 0.7), 1.2, true)
+	em.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# 高光 + 呼吸金环
+	em.draw_circle(c + Vector2(-9, -11), 7.0, Color(1, 1, 1, 0.5 if winner == 1 else 0.9))
+	em.draw_arc(c, 37.0, 0.0, TAU, 48, Color(ACCENT_GOLD, 0.4 + 0.25 * breath), 2.0, true)
+
 func _show_win_banner() -> void:
 	## 卡片化胜利横幅（game-ui-design：聚焦 + 层级；godot-ui/godot-master：
 	## CenterContainer 响应式居中，不用绝对像素；容器 mouse_filter=IGNORE 不挡棋盘）
@@ -2639,8 +2675,22 @@ func _show_win_banner() -> void:
 
 		var card_box := VBoxContainer.new()
 		card_box.alignment = BoxContainer.ALIGNMENT_CENTER
-		card_box.add_theme_constant_override("separation", 10)
+		card_box.add_theme_constant_override("separation", 8)
 		_win_card.add_child(card_box)
+
+		# 获胜徽章：获胜方棋子 + 呼吸光环（与标题页同语言）
+		_win_emblem = Control.new()
+		_win_emblem.custom_minimum_size = Vector2(0, 96)
+		_win_emblem.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_win_emblem.draw.connect(_draw_win_emblem.bind(_win_emblem))
+		card_box.add_child(_win_emblem)
+
+		var over := Label.new()
+		over.text = "W I N N E R"
+		over.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		over.add_theme_font_size_override("font_size", 12)
+		over.add_theme_color_override("font_color", Color(_accent2(), 0.8))
+		card_box.add_child(over)
 
 		_win_label = Label.new()
 		_win_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2650,17 +2700,32 @@ func _show_win_banner() -> void:
 		_win_label.add_theme_constant_override("outline_size", 8)
 		card_box.add_child(_win_label)
 
-		var sub := Label.new()
-		sub.name = "WinSub"
-		sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		sub.add_theme_font_size_override("font_size", 14)
-		sub.add_theme_color_override("font_color", Color("9db4d8"))
-		card_box.add_child(sub)
+		# 金杠分隔（与标题页同语言）
+		var wbar := ColorRect.new()
+		wbar.color = Color(_accent2(), 0.9)
+		wbar.custom_minimum_size = Vector2(96, 3)
+		wbar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		card_box.add_child(wbar)
+
+		_win_sub = Label.new()
+		_win_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_win_sub.add_theme_font_size_override("font_size", 14)
+		_win_sub.add_theme_color_override("font_color", Color("9db4d8"))
+		card_box.add_child(_win_sub)
 
 		_win_buttons = HBoxContainer.new()
 		_win_buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 		_win_buttons.add_theme_constant_override("separation", 14)
 		card_box.add_child(_win_buttons)
+
+		# 子项错峰入场（首次构建时挂 tween，复用时保持可见）
+		var widx := 0
+		for c in card_box.get_children():
+			c.modulate.a = 0.0
+			var wtw := c.create_tween()
+			wtw.tween_interval(0.18 + 0.07 * widx)
+			wtw.tween_property(c, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+			widx += 1
 
 		_rematch_button = Button.new()
 		_rematch_button.text = "再来一局"
@@ -2682,11 +2747,7 @@ func _show_win_banner() -> void:
 	if winner == 3:
 		msg = "平局"
 	_win_label.text = msg
-	for n in _win_card.get_children():
-		if n is VBoxContainer:
-			for c in n.get_children():
-				if c is Label and c != _win_label:
-					c.text = "共 %d 手" % move_count
+	_win_sub.text = "共 %d 手" % move_count
 	_win_dim.visible = true
 	_win_dim.modulate.a = 0.0
 	_win_card.modulate.a = 0.0
@@ -2723,6 +2784,8 @@ func _hide_win_banner() -> void:
 	_win_label = null
 	_win_buttons = null
 	_win_sheen = null
+	_win_emblem = null
+	_win_sub = null
 
 
 # ============================================================
