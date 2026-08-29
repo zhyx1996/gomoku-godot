@@ -573,6 +573,7 @@ func poll_output() -> void:
 			_web_ready = true
 			_started = true
 			threads = mini(8, maxi(1, OS.get_processor_count()))
+			# 注：实测线程>8 或发送大 TIMEOUT_MATCH 会让 WASM 引擎搜索异常拉长，保持 8 线程
 			_apply_config()
 			new_game()
 			web_ready.emit()
