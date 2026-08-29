@@ -3332,7 +3332,6 @@ func _draw_embers() -> void:
 	var count := 26
 	for k in range(count):
 		var h := _hash01(k * 97 + 13)
-		var cycle := 7.0 + h * 6.0
 		var p := fposmod(_fx_time * (0.05 + h * 0.06) + h, 1.0)
 		var x := vp.x * _hash01(k * 31 + 7)
 		var y := vp.y * (1.05 - p * 1.1)
