@@ -610,8 +610,6 @@ func poll_output() -> void:
 			_send("BEGIN")
 		else:
 			return
-	elif _web_warming:
-		return  # 预热搜索中：本帧不处理输出（出子后在下方标记完成）
 	for line in _poll_lines():
 		var handled: Variant = _handle_output_line(line)
 		if handled is Vector2i:
