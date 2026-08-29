@@ -15,3 +15,5 @@ screenshots/
 
 # Compiled binaries (sources kept in gomoku-c/)
 gomoku-c/*.exe
+ci3.log
+ci_watch.log

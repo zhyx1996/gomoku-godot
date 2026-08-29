@@ -146,6 +146,10 @@ var _ui_style := 0                       # 界面风格 0=经典 1=流光（重�
 var _ui_style_button: Button = null      # 设置弹窗「界面风格」按钮
 var _title_glow_colors: Array = [ACCENT_CYAN, Color("bfe9ff")]  # 标题流光字循环色板
 var _threat_origin := Vector2i(-1, -1)   # 触发制胜棋型的落子点（流光折线分组锚点）
+var _win_sparks: Array = []              # 获胜火花粒子（拖尾光点，带重力）
+var _shake_start := -1.0                 # 胜利震屏起始时刻（<0 关闭）
+var _win_sheen: ColorRect = null         # 胜利卡片玻璃扫光带
+const WIN_SHAKE_DUR := 0.32              # 震屏时长
 
 # ---- 分析状态（引擎回调更新）----
 var _realtime_best := Vector2i(-1, -1)  # 思考中引擎当前最佳候选点
@@ -206,6 +210,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_fx_time += delta
 	_update_particles(delta)
+	_update_win_sparks(delta)
 	_update_toast()
 	# 胜利连珠：弹性放大后回落（短暂夸张并回归静止）
 	if _in_game and winner != 0 and _win_anim < 1.0:
@@ -238,7 +243,7 @@ func _process(delta: float) -> void:
 			or not _eval_history.is_empty() or _realtime_best.x >= 0 \
 			or not _realtime_lost.is_empty() or not _forbid_cells.is_empty() \
 			or _hover_cell.x >= 0 or not _confetti.is_empty() \
-			or not _attack_cells.is_empty():
+			or not _attack_cells.is_empty() or not _win_sparks.is_empty():
 		queue_redraw()
 
 
@@ -283,13 +288,37 @@ func _update_particles(delta: float) -> void:
 		var pos: Vector2 = c["pos"]
 		var vel: Vector2 = c["vel"]
 		vel.y += c["gravity"] * delta
+		if c["kind"] == 1:
+			vel *= maxf(0.0, 1.0 - 0.5 * delta)
+		else:
+			c["rot"] = c["rot"] + c["spin"] * delta
 		pos += vel * delta
 		c["pos"] = pos
 		c["vel"] = vel
-		c["rot"] = c["rot"] + c["spin"] * delta
 		if pos.y < size.y + 20.0:
 			kept.append(c)
 	_confetti = kept
+
+
+## 获胜火花粒子推进（重力 + 阻尼 + 生命衰减）。
+func _update_win_sparks(delta: float) -> void:
+	if _win_sparks.is_empty():
+		return
+	if winner == 0:
+		_win_sparks.clear()
+		return
+	var kept: Array = []
+	for p in _win_sparks:
+		p["age"] = p["age"] + delta
+		if p["age"] >= p["life"]:
+			continue
+		var vel: Vector2 = p["vel"]
+		vel.y += 300.0 * delta
+		vel *= maxf(0.0, 1.0 - 1.6 * delta)
+		p["vel"] = vel
+		p["pos"] = p["pos"] + vel * delta
+		kept.append(p)
+	_win_sparks = kept
 
 
 ## 生成胜利彩带。
@@ -299,14 +328,16 @@ func _spawn_confetti() -> void:
 	_confetti.clear()
 	var size := get_viewport_rect().size
 	var colors := [ACCENT_GOLD, ACCENT_GOLD, Color("fde68a"), ACCENT_CYAN, ACCENT_MAGENTA, ACCENT_GREEN, Color("f87171")]
-	for i in range(140):
+	for i in range(150):
+		var kind := 0 if i % 5 < 4 else 1  # 8 成缎带 / 2 成火花拖尾
 		_confetti.append({
+			"kind": kind,
 			"pos": Vector2(randf_range(0, size.x), randf_range(-size.y * 0.25, -10.0)),
-			"vel": Vector2(randf_range(-36.0, 36.0), randf_range(40.0, 110.0)),
-			"gravity": randf_range(140.0, 220.0),
+			"vel": Vector2(randf_range(-36.0, 36.0), randf_range(40.0, 110.0)) if kind == 0 else Vector2(randf_range(-20.0, 20.0), randf_range(120.0, 240.0)),
+			"gravity": randf_range(140.0, 220.0) if kind == 0 else randf_range(40.0, 90.0),
 			"rot": randf_range(0.0, TAU),
 			"spin": randf_range(-8.0, 8.0),
-			"size": randf_range(3.0, 8.0),
+			"size": randf_range(3.5, 8.5) if kind == 0 else randf_range(5.0, 11.0),
 			"color": colors[i % colors.size()],
 		})
 
@@ -1795,6 +1826,8 @@ func _new_game() -> void:
 	_attack_type = ""
 	_attack_time = -1.0
 	_win_anim = 0.0
+	_shake_start = -1.0
+	_win_sparks.clear()
 	_move_history.clear()
 	_analysis_data.clear()
 	_eval_history.clear()
@@ -2471,16 +2504,42 @@ func _has_five_in_a_row(origin: Vector2i, player: int) -> bool:
 func _trigger_win_fx() -> void:
 	_win_anim = 0.0
 	_win_flash = _fx_time
+	_shake_start = _fx_time
 	_spawn_confetti()
+	_spawn_win_sparks()
 	if _win_player:
 		_win_player.play()
-	_show_win_banner()
+	# 演出分两幕：光束/射线/火花先播 ~0.55s，横幅随后入场（不遮挡高光段）
+	await get_tree().create_timer(0.55).timeout
+	if winner != 0 and _in_game:
+		_show_win_banner()
+
+
+## 获胜火花：从每颗连珠棋子向外迸发的拖尾光点。
+func _spawn_win_sparks() -> void:
+	_win_sparks.clear()
+	if _reduced_fx:
+		return
+	var colors := [ACCENT_GOLD, Color("fff3c4"), ACCENT_CYAN, Color("ffb86b")]
+	for c in winning_cells:
+		var center := _cell_to_screen(c)
+		for i in range(16):
+			var ang := randf_range(0.0, TAU)
+			var speed := randf_range(70.0, 260.0)
+			_win_sparks.append({
+				"pos": center + Vector2(randf_range(-8, 8), randf_range(-8, 8)),
+				"vel": Vector2(cos(ang), sin(ang) * 0.75) * speed,
+				"life": randf_range(0.55, 1.15),
+				"age": 0.0,
+				"width": randf_range(1.4, 2.6),
+				"color": colors[i % colors.size()],
+			})
 
 
 func _show_win_banner() -> void:
 	## 卡片化胜利横幅（game-ui-design：聚焦 + 层级；godot-ui/godot-master：
 	## CenterContainer 响应式居中，不用绝对像素；容器 mouse_filter=IGNORE 不挡棋盘）
-	if _game_ui_layer == null:
+	if _game_ui_layer == null or winner == 0:
 		return
 	if _win_dim == null:
 		_win_dim = ColorRect.new()
@@ -2507,6 +2566,20 @@ func _show_win_banner() -> void:
 		card.content_margin_bottom = 30
 		_win_card.add_theme_stylebox_override("panel", card)
 		_win_center.add_child(_win_card)
+		# 玻璃扫光带：周期性掠过卡片（减弱动效时不加）
+		if not _reduced_fx:
+			_win_card.clip_contents = true
+			_win_sheen = ColorRect.new()
+			_win_sheen.color = Color(1.0, 1.0, 0.92, 0.09)
+			_win_sheen.size = Vector2(64, 320)
+			_win_sheen.rotation_degrees = 18.0
+			_win_sheen.position = Vector2(-120, -60)
+			_win_card.add_child(_win_sheen)
+			var sheen_tween := _win_sheen.create_tween()
+			sheen_tween.set_loops()
+			sheen_tween.tween_interval(2.4)
+			sheen_tween.tween_property(_win_sheen, "position:x", 480.0, 1.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			sheen_tween.tween_property(_win_sheen, "position:x", -120.0, 0.0)
 
 		var card_box := VBoxContainer.new()
 		card_box.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -2593,6 +2666,7 @@ func _hide_win_banner() -> void:
 	_win_card = null
 	_win_label = null
 	_win_buttons = null
+	_win_sheen = null
 
 
 # ============================================================
@@ -2721,6 +2795,14 @@ func _draw() -> void:
 	_draw_background()
 	if not _in_game:
 		return
+	# 胜利震屏：画布整体小幅抖动（减弱动效时跳过）
+	var shake := 0.0
+	if _shake_start >= 0.0 and not _reduced_fx:
+		var shake_age := _fx_time - _shake_start
+		if shake_age < WIN_SHAKE_DUR:
+			shake = (1.0 - shake_age / WIN_SHAKE_DUR) * 3.2
+	if shake > 0.01:
+		draw_set_transform(Vector2(sin(_fx_time * 93.0), cos(_fx_time * 81.0)) * shake)
 	_draw_board()
 	_draw_stones()
 	_draw_win_beam()
@@ -2729,11 +2811,15 @@ func _draw() -> void:
 	_draw_realtime()
 	_draw_attack_highlight()
 	_draw_threat_highlight()
+	_draw_win_sparks()
 	_draw_overlays()
 	_draw_win_glow()
+	_draw_embers()
 	_draw_confetti()
 	_draw_eval_chart()
 	_draw_win_flash()
+	if shake > 0.01:
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 func _draw_background() -> void:
@@ -2949,12 +3035,16 @@ func _draw_win_beam() -> void:
 		var cs := _cell_size()
 		for layer in [[cs * 0.85, 0.10], [cs * 0.48, 0.20], [cs * 0.22, 0.45], [cs * 0.09, 0.95]]:
 			draw_polyline(PackedVector2Array(seg), Color(ACCENT_GOLD, layer[1]), layer[0])
-	# 波前经过的棋子闪白（高斯衰减）
+	# 波前经过的棋子：白闪 + 金色四芒星绽放；光束到终点后整体衰减退场（不永久盖住制胜子）
+	var wave_alpha := 1.0
+	if t >= 1.0:
+		wave_alpha = clampf(1.0 - (_fx_time - _win_flash - 0.45) / 0.6, 0.0, 1.0)
 	for i in range(pts.size()):
 		var local := cum[i] / total
-		var flash := exp(-pow((reach / total - local) * 6.5, 2.0))
+		var flash := exp(-pow((reach / total - local) * 6.5, 2.0)) * wave_alpha
 		if flash > 0.02:
 			draw_circle(pts[i], _cell_size() * 0.52, Color(1.0, 1.0, 0.9, flash * 0.85))
+			_draw_star_flare(pts[i], _cell_size() * (0.5 + 0.7 * flash), Color(ACCENT_GOLD, flash * 0.9), _fx_time * 0.8 + float(i))
 	# 震中双环冲击波（错峰扩散、随进程消散）
 	var center := pts[pts.size() - 1]
 	var r1 := (1.0 - pow(1.0 - t, 3.0)) * _cell_size() * 7.0
@@ -2963,7 +3053,112 @@ func _draw_win_beam() -> void:
 	if t2 > 0.0:
 		var r2 := (1.0 - pow(1.0 - t2, 3.0)) * _cell_size() * 4.5
 		draw_arc(center, r2, 0.0, TAU, 40, Color("ffffff", (1.0 - t2) * 0.30), 2.0)
+	# 神光射线：胜利后 1.4s 内从连珠中心放射旋转光芒
+	_draw_win_rays(pts[0].lerp(center, 0.5))
+	# 法阵：光束贯连后展开的双层旋转阵环，横幅期间持续低吟
+	_draw_win_circle(pts[0].lerp(center, 0.5), _cell_size())
 
+
+## 神光射线：从中心放射的旋转光束（胜利后短暂出现）。
+func _draw_win_rays(center: Vector2) -> void:
+	if _reduced_fx or _win_flash < 0.0:
+		return
+	var age := _fx_time - _win_flash
+	if age > 1.4:
+		return
+	var fade := 1.0 - age / 1.4
+	var n := 12
+	var cs := _cell_size()
+	for k in range(n):
+		var ang := _fx_time * 0.25 + float(k) * TAU / float(n)
+		var dir := Vector2(cos(ang), sin(ang))
+		var length := cs * (4.5 + 2.2 * sin(_fx_time * 3.0 + float(k) * 1.7))
+		var side := Vector2(-dir.y, dir.x) * cs * 0.13
+		var a := 0.09 * fade * (0.55 + 0.45 * sin(float(k) * 2.3 + _fx_time * 2.1))
+		draw_colored_polygon(PackedVector2Array([center - side * 0.25, center + dir * length, center + side * 0.25]), Color(1.0, 0.95, 0.78, a))
+
+## 胜利法阵：双层旋转阵环（外环刻度顺时针、内环虚线弧逆时针）。
+func _draw_win_circle(center: Vector2, cs: float) -> void:
+	if _reduced_fx or _win_flash < 0.0:
+		return
+	var appear := clampf((_fx_time - _win_flash - 0.45) / 0.7, 0.0, 1.0)
+	if appear <= 0.0:
+		return
+	var ease_in := 1.0 - pow(1.0 - appear, 3.0)
+	var breathe := 0.75 + 0.25 * sin(_fx_time * 2.0)
+	var base := 0.42 * ease_in * breathe
+	var R := cs * 2.7 * (0.9 + 0.1 * ease_in)
+	# 外环
+	draw_arc(center, R, 0.0, TAU, 72, Color(ACCENT_GOLD, base * 0.85), 2.0)
+	draw_arc(center, R * 0.94, 0.0, TAU, 72, Color(ACCENT_GOLD, base * 0.4), 1.0)
+	# 外环刻度（顺时针旋转）
+	var ticks := 16
+	for k in range(ticks):
+		var ang := _fx_time * 0.5 + float(k) * TAU / float(ticks)
+		var dir := Vector2(cos(ang), sin(ang))
+		var tick_a := base * (0.9 if k % 4 == 0 else 0.5)
+		draw_line(center + dir * R, center + dir * (R + cs * (0.16 if k % 4 == 0 else 0.09)), Color(ACCENT_GOLD, tick_a), 1.6)
+	# 内环虚线弧（逆时针旋转）
+	var segs := 3
+	for k in range(segs):
+		var start := -_fx_time * 0.9 + float(k) * TAU / float(segs)
+		draw_arc(center, R * 0.66, start, start + 1.5, 20, Color("fff3c4", base * 0.55), 2.4)
+	# 中心微光
+	draw_circle(center, cs * 0.10, Color(1.0, 0.97, 0.85, base * 0.5))
+
+## 四芒星（两枚旋转细菱形交叉 + 中心亮点）。
+func _draw_star_flare(center: Vector2, radius: float, color: Color, rot: float) -> void:
+	if radius <= 0.5 or color.a <= 0.01:
+		return
+	var pts := PackedVector2Array()
+	for k in range(4):
+		var ang := rot + float(k) * PI / 2.0
+		var tip := center + Vector2(cos(ang), sin(ang)) * radius
+		var in1 := center + Vector2(cos(ang + PI / 4.0), sin(ang + PI / 4.0)) * radius * 0.16
+		var in2 := center + Vector2(cos(ang - PI / 4.0), sin(ang - PI / 4.0)) * radius * 0.16
+		pts.append(in2)
+		pts.append(tip)
+		pts.append(in1)
+	draw_colored_polygon(pts, color)
+	# 长十字光针（更细的一层，拉长 1.6 倍）
+	for k in range(2):
+		var ang := rot + float(k) * PI / 2.0
+		var dir := Vector2(cos(ang), sin(ang))
+		draw_line(center - dir * radius * 1.6, center + dir * radius * 1.6, Color(color, color.a * 0.45), 1.2)
+	draw_circle(center, radius * 0.14, Color(1.0, 1.0, 0.95, color.a))
+
+## 获胜火花绘制（辉光 + 亮核双层拖尾）。
+func _draw_win_sparks() -> void:
+	if _win_sparks.is_empty():
+		return
+	for p in _win_sparks:
+		var k := 1.0 - float(p["age"]) / float(p["life"])
+		var col: Color = p["color"]
+		var tail: Vector2 = p["vel"] * 0.045
+		draw_line(p["pos"] - tail, p["pos"], Color(col, k * 0.35), float(p["width"]) * 2.6)
+		draw_line(p["pos"] - tail * 0.6, p["pos"], Color(col.lerp(Color.WHITE, 0.5), k), float(p["width"]))
+
+## 胜利后的环境余烬：全屏缓慢上升的金色微光（无状态，按时间哈希取位置）。
+func _draw_embers() -> void:
+	if _reduced_fx or winner == 0:
+		return
+	var vp := get_viewport_rect().size
+	var count := 26
+	for k in range(count):
+		var h := _hash01(k * 97 + 13)
+		var cycle := 7.0 + h * 6.0
+		var p := fposmod(_fx_time * (0.05 + h * 0.06) + h, 1.0)
+		var x := vp.x * _hash01(k * 31 + 7)
+		var y := vp.y * (1.05 - p * 1.1)
+		var tw := 0.5 + 0.5 * sin(_fx_time * (1.5 + h * 2.0) + float(k))
+		draw_circle(Vector2(x, y), 1.2 + h * 1.8, Color(ACCENT_GOLD, 0.10 + 0.10 * tw))
+
+## 简单整数哈希 → 0~1（无状态粒子用）。
+func _hash01(n: int) -> float:
+	var x := n * 374761393 + 668265263
+	x = (x ^ (x >> 13)) * 1274126177
+	x = x ^ (x >> 16)
+	return float(abs(x) % 100000) / 100000.0
 
 ## 胜利触发瞬间的全屏微闪（0.18s 消退），强化定格冲击感。
 func _draw_win_flash() -> void:
@@ -2985,7 +3180,15 @@ func _draw_confetti() -> void:
 		# 用变换绘制本地矩形：旧写法把旋转后的四角放到世界坐标再三角化，
 		# 旋转接近竖直时 half.x≈0 会退化成细缝导致 triangulation failed（彩带消失+刷错误）
 		draw_set_transform(pos, rot, Vector2.ONE)
-		draw_rect(Rect2(-s * 0.5, -s * 0.25, s, s * 0.5), col)
+		if c["kind"] == 0:
+			# 缎带：外圈辉光 + 亮核双层
+			draw_rect(Rect2(-s * 0.85, -s * 0.55, s * 1.7, s * 1.1), Color(col, 0.22))
+			draw_rect(Rect2(-s * 0.5, -s * 0.16, s, s * 0.32), col)
+		else:
+			# 火花拖尾：竖直光条 + 亮核点
+			draw_rect(Rect2(-s * 0.12, -s * 1.1, s * 0.24, s * 2.2), Color(col, 0.30))
+			draw_rect(Rect2(-s * 0.05, -s * 0.9, s * 0.1, s * 1.8), Color(col.lerp(Color.WHITE, 0.5), 0.9))
+		draw_circle(Vector2.ZERO, 0.0, col)  # 保持变换配对（无操作）
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
@@ -3038,6 +3241,25 @@ func _draw_threat_highlight() -> void:
 	for i in range(paths.size()):
 		var phase := _fx_time * 0.55 + float(i) * 0.5
 		_draw_flow_line(paths[i], color, phase, _stone_radius())
+	# 充能环：每颗棋子外围旋转的双段弧 + 柔和呼吸，表现「正在蓄力」
+	for c in _threat_cells:
+		var center := _cell_to_screen(c)
+		var ring_r := _stone_radius() + 5.5
+		var spin := _fx_time * 2.2 + float(c.x + c.y) * 0.7
+		draw_arc(center, ring_r, spin, spin + 1.1, 12, Color(color, 0.5), 2.0, true)
+		draw_arc(center, ring_r, spin + PI, spin + PI + 1.1, 12, Color(color, 0.5), 2.0, true)
+		var glow := 0.5 + 0.5 * sin(_fx_time * 2.6 + float(c.x) * 1.3 + float(c.y))
+		draw_circle(center, _stone_radius() + 9.0 + glow * 2.0, Color(color, 0.05 + 0.05 * glow))
+	# 星屑：棋子间随机升起的微光粒（无状态）
+	for c in _threat_cells:
+		var base := _cell_to_screen(c)
+		for k in range(2):
+			var h := _hash01(int(c.x) * 73856093 + int(c.y) * 19349663 + k * 83492791)
+			var p := fposmod(_fx_time * (0.35 + h * 0.3) + h, 1.0)
+			var drift := sin(h * 40.0 + p * 5.0) * 9.0 * (1.0 - p)
+			var pos := base + Vector2(drift + (h - 0.5) * 16.0, -p * 26.0 - 6.0)
+			var a := sin(p * PI) * 0.55
+			draw_circle(pos, 1.5 + h * 1.2, Color(color.lerp(Color.WHITE, 0.4), a))
 
 
 ## 把棋型格子按所在直线分组、沿方向排序成世界坐标折线。

@@ -78,24 +78,28 @@ func _process(_delta: float) -> bool:
 		8:
 			if frame > 346:
 				_shot("qa-win-beam.png")
+				stage = 81
+		81:
+			if frame > 366:
+				_shot("qa-win-rays.png")
 				stage = 9
 		9:
-			if frame > 420:
+			if frame > 560:
 				_shot("qa-win-banner.png")
 				stage = 10
 		10:
-			if frame > 540:
+			if frame > 720:
 				_shot("qa-win-line-flow.png")
 				# 对局中切界面风格：验证强调色就地重建
 				game._on_ui_style_pressed()
 				stage = 11
 		11:
-			if frame > 580:
+			if frame > 780:
 				_shot("qa-game-v2-accent.png")
 				game._open_settings()
 				stage = 12
 		12:
-			if frame > 620:
+			if frame > 840:
 				_shot("qa-settings-v2.png")
 				print("DONE")
 				return true
