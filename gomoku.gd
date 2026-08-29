@@ -1100,6 +1100,7 @@ func _build_ui() -> void:
 		val.text = "-"
 		val.add_theme_font_size_override("font_size", 12)
 		val.add_theme_color_override("font_color", Color("dbe4f2"))
+		val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(val)
 		_analysis_panel.add_child(row)
 		_analysis_vals[mr[0]] = val
@@ -1116,6 +1117,7 @@ func _build_ui() -> void:
 		var rval := Label.new()
 		rval.text = "-"
 		rval.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		rval.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		rval.add_theme_font_size_override("font_size", 12)
 		rval.add_theme_color_override("font_color", Color("dbe4f2"))
 		rrow.add_child(rval)
