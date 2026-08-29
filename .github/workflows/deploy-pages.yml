@@ -1,0 +1,98 @@
+name: Deploy Web (GitHub Pages)
+
+# 推送到 master 自动导出 Web 版并部署到本仓库的 GitHub Pages：
+# https://zhyx1996.github.io/gomoku-godot/
+# （引擎数据 /gomoku/build/ 与桥接脚本 /gomoku/rapfi_bridge.js 由
+#   zhyx1996.github.io 仓库的同名路径提供，同域名下绝对路径直接可用）
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.7.1
+
+jobs:
+  deploy:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: https://zhyx1996.github.io/gomoku-godot/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot editor and export templates
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: |
+            godot-editor
+            C:\Users\runneradmin\AppData\Roaming\Godot\export_templates
+          key: godot-${{ env.GODOT_VERSION }}-win64
+
+      - name: Download Godot and export templates
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "https://github.com/godotengine/godot/releases/download/$env:GODOT_VERSION-stable"
+          New-Item -ItemType Directory -Force godot-editor | Out-Null
+          Invoke-WebRequest "$base/Godot_v$($env:GODOT_VERSION)-stable_win64.exe.zip" -OutFile godot.zip
+          Invoke-WebRequest "$base/Godot_v$($env:GODOT_VERSION)-stable_export_templates.tpz" -OutFile templates.tpz
+          Expand-Archive godot.zip -DestinationPath godot-editor -Force
+          tar -xf templates.tpz
+          $dst = "$env:APPDATA\Godot\export_templates\$($env:GODOT_VERSION).stable"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item templates/* $dst -Force
+
+      - name: Import project resources
+        shell: pwsh
+        run: |
+          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --import --path . 2>&1 | Select-Object -Last 3
+
+      - name: Export web
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/web | Out-Null
+          # 等待产物稳定而非信任退出码
+          & ".\godot-editor\Godot_v$($env:GODOT_VERSION)-stable_win64.exe" --headless --export-release "Web" build/web/index.html --path . | Out-Null
+          $pck = "build/web/index.pck"; $last = -1; $deadline = (Get-Date).AddMinutes(8)
+          while ($true) {
+            if (Test-Path $pck) {
+              $sz = (Get-Item $pck).Length
+              if ($sz -eq $last -and $sz -gt 5MB) { break }
+              $last = $sz
+            }
+            if ((Get-Date) -gt $deadline) { throw "Web export timed out" }
+            Start-Sleep -Seconds 5
+          }
+          Get-ChildItem build/web | Select-Object Name, Length
+
+      - name: Assemble site
+        shell: pwsh
+        run: |
+          # 移除导出目录里的陈旧副本：桥接脚本与引擎数据由 zhyx1996.github.io 仓库提供；
+          # COI Service Worker 使用仓库内已修补版本（SW 作用域补丁 + gzip 头清理）
+          Remove-Item build/web/rapfi_bridge.js -ErrorAction SilentlyContinue
+          Remove-Item build/web/gomoku -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item web/coi-serviceworker.min.js build/web/coi-serviceworker.min.js -Force
+          Get-ChildItem build/web | Select-Object Name, Length
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
