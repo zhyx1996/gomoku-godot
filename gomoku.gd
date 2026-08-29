@@ -928,12 +928,12 @@ func _current_difficulty_id() -> int:
 ## 难度选项列表（机机对战只有推理引擎三档）。
 func _difficulty_options() -> Array:
 	var opts := [
-		{"id": 0, "label": "简单"},
-		{"id": 1, "label": "中等"},
-		{"id": 2, "label": "困难"},
+		{"id": 0, "label": "简单 · 约 0.5 秒/手"},
+		{"id": 1, "label": "中等 · 约 1.5 秒/手"},
+		{"id": 2, "label": "困难 · 约 4 秒/手"},
 	]
 	if game_mode != GameMode.EVE and _dlc_unlocked:
-		opts.append({"id": 3, "label": "古法编程"})
+		opts.append({"id": 3, "label": "古法编程 · 前瞻搜索"})
 	return opts
 
 
@@ -953,7 +953,13 @@ func _on_difficulty_option(id: int) -> void:
 	_update_title_difficulty()
 	_save_settings()
 	if _in_game:
-		_new_game()
+		# 热切换：对局中即时调整引擎强度/时限，当前棋局继续
+		if ai != null:
+			if game_mode == GameMode.EVE:
+				ai.set_difficulty(_eve_difficulty)
+			elif not _classic_mode:
+				ai.set_difficulty(ai_difficulty)
+		_update_status_text()
 
 
 func _build_ui() -> void:
