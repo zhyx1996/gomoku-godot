@@ -47,7 +47,7 @@ enum Difficulty { EASY, MEDIUM, HARD }
 const DIFFICULTY_CONFIG := {
 	Difficulty.EASY:   {"strength": 30, "timeout_ms": 500},
 	Difficulty.MEDIUM: {"strength": 70, "timeout_ms": 1500},
-	Difficulty.HARD:   {"strength": 100, "timeout_ms": 4000},
+	Difficulty.HARD:   {"strength": 100, "timeout_ms": 3000},
 }
 
 # ---- 引擎配置状态 ----

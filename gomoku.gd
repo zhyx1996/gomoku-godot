@@ -930,7 +930,7 @@ func _difficulty_options() -> Array:
 	var opts := [
 		{"id": 0, "label": "简单 · 约 0.5 秒/手"},
 		{"id": 1, "label": "中等 · 约 1.5 秒/手"},
-		{"id": 2, "label": "困难 · 约 4 秒/手"},
+		{"id": 2, "label": "困难 · 约 3 秒/手"},
 	]
 	if game_mode != GameMode.EVE and _dlc_unlocked:
 		opts.append({"id": 3, "label": "古法编程 · 前瞻搜索"})
