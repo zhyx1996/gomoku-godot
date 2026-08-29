@@ -392,6 +392,8 @@ func _build_title_screen() -> void:
 	else:
 		_build_title_classic()
 	_add_title_style_switch()
+	# 网页端：标题出现即后台预加载引擎（40MB 数据），第一手不再等下载
+	RapfiAI.preload_web_engine()
 
 
 ## 标题界面右下角「界面风格」切换入口（两套界面各自挂载）。
@@ -2217,7 +2219,9 @@ func _update_status_text() -> void:
 	elif winner == 3:
 		_status_base = "平局"
 	elif ai_thinking:
-		if game_mode == GameMode.EVE:
+		if OS.has_feature("web") and ai != null and not ai.is_web_ready():
+			_status_base = "引擎加载中…"
+		elif game_mode == GameMode.EVE:
 			_status_base = "「%s」思考中" % _ai_name(current_player)
 		else:
 			_status_base = "AI 思考中"

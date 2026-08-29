@@ -68,6 +68,7 @@ var _stderr: FileAccess = null
 var _difficulty: int = Difficulty.MEDIUM
 var _started := false
 var _web_ready := false          # 网页端：引擎已加载并完成初始化
+var _web_load_started := false   # 网页端：引擎加载已发起（全局防重复）
 var _stop_requested := false     # 已请求停止当前思考（用于让异步 await 返回 -1）
 var _think_thread: Thread = null      # 原生端：后台思考线程（主线程保持流畅）
 var _on_thread := false               # 当前是否处于后台线程读循环（分析数据转 deferred 用）
@@ -78,21 +79,38 @@ var _exe_name := ""                      # 探测选定的引擎 exe（空=未�
 var analysis_callback: Callable = Callable()
 
 
+## 网页端预加载引擎：标题界面即开始下载（window.__rapfiLoading 防重复触发）。
+static func preload_web_engine() -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("if(!window.__rapfiLoading){window.__rapfiLoading=true;window.RapfiBridge&&window.RapfiBridge.load('/gomoku/build/')}")
+
+## 网页端引擎是否已就绪。
+func is_web_ready() -> bool:
+	return _web_ready
+
+## 网页端发起引擎加载（防重复）。
+func _send_load() -> void:
+	if not _web_load_started:
+		_web_load_started = true
+		JavaScriptBridge.eval("if(!window.__rapfiLoading){window.__rapfiLoading=true;window.RapfiBridge&&window.RapfiBridge.load('/gomoku/build/')}")
+
 ## 启动引擎并初始化棋盘。返回 true 表示成功。
 func start(difficulty: int = Difficulty.MEDIUM) -> bool:
 	_difficulty = difficulty
-	stop()
 
 	# 设置难度参数（strength 与 timeout）
 	strength = DIFFICULTY_CONFIG[difficulty]["strength"]
 	timeout_turn = DIFFICULTY_CONFIG[difficulty]["timeout_ms"]
 
 	if IS_WEB:
-		# 网页：触发异步加载 WASM 引擎，初始化由 poll_output() 完成
-		JavaScriptBridge.eval("window.RapfiBridge && window.RapfiBridge.load('/gomoku/build/')")
+		# 网页：引擎可能已由标题页预加载；_send_load 防重复，不会二次下载
+		_send_load()
 		_started = true
 		return true
 
+	stop()  # 原生：清掉旧进程
+
+	stop()  # 原生：清掉旧进程
 	var exe_path := _resolve_engine_path()
 	if exe_path == "" or not FileAccess.file_exists(exe_path):
 		push_error("Rapfi 引擎不存在: %s" % exe_path)
@@ -218,7 +236,7 @@ func warmup() -> void:
 ## 停止引擎子进程。
 func stop() -> void:
 	if IS_WEB:
-		_send("END")
+		# 不发 END：已加载实例保留（新局会重置棋盘），页面关闭由浏览器回收
 		_started = false
 		_web_ready = false
 		return
