@@ -21,6 +21,15 @@ extends RefCounted
 ##   - 引擎 stdout：MESSAGE / INFO / FORBID / ERROR / "x,y"（走法）
 
 const ENGINE_DIR := "engine"
+# 引擎指令集候选（从快到慢）：启动时探测本机支持的最优版本，失败自动降级
+const ENGINE_CANDIDATES := [
+	"pbrain-rapfi-windows-avx512vnni.exe",
+	"pbrain-rapfi-windows-avx512.exe",
+	"pbrain-rapfi-windows-avxvnni.exe",
+	"pbrain-rapfi-windows-avx2.exe",
+	"pbrain-rapfi-windows-sse.exe",
+]
+const EXE_NAME := "pbrain-rapfi-windows-avx2.exe"  # 兜底（候选全部探测失败时）
 var IS_WEB := OS.has_feature("web")
 
 ## 网页端引擎返回走法时发出（异步思考用）。
@@ -40,9 +49,6 @@ const DIFFICULTY_CONFIG := {
 	Difficulty.MEDIUM: {"strength": 70, "timeout_ms": 1500},
 	Difficulty.HARD:   {"strength": 100, "timeout_ms": 4000},
 }
-
-## 指令集版本选择：优先 AVX2（兼容性最广、速度佳）
-const EXE_NAME := "pbrain-rapfi-windows-avx2.exe"
 
 # ---- 引擎配置状态 ----
 var rule := 0                  # 0 无禁手 / 1 标准 / 2 有禁手
@@ -66,6 +72,7 @@ var _stop_requested := false     # 已请求停止当前思考（用于让异步
 var _think_thread: Thread = null      # 原生端：后台思考线程（主线程保持流畅）
 var _on_thread := false               # 当前是否处于后台线程读循环（分析数据转 deferred 用）
 var _zombie_threads: Array[Thread] = []  # 已停止但尚未自然退出的旧线程，防悬空释放
+var _exe_name := ""                      # 探测选定的引擎 exe（空=未探测）
 
 # 分析数据回调（引擎每输出一条 INFO，调用此 Callable）
 var analysis_callback: Callable = Callable()
@@ -90,6 +97,7 @@ func start(difficulty: int = Difficulty.MEDIUM) -> bool:
 	if exe_path == "" or not FileAccess.file_exists(exe_path):
 		push_error("Rapfi 引擎不存在: %s" % exe_path)
 		return false
+	print("Rapfi 引擎: %s" % _exe_name)
 
 	var result := OS.execute_with_pipe(exe_path, PackedStringArray(["--config", "config.toml"]), false)
 	if result.is_empty():
@@ -573,6 +581,53 @@ func _js_quote(s: String) -> String:
 	return "'" + s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
 
 
-## 解析引擎 exe 的绝对路径。
+## 解析引擎 exe 的绝对路径：优先探测本机支持的最优指令集版本（每次进程生命周期只探测一次）。
 func _resolve_engine_path() -> String:
+	if _exe_name != "":
+		return ProjectSettings.globalize_path("res://" + ENGINE_DIR + "/" + _exe_name)
+	for candidate in ENGINE_CANDIDATES:
+		var path := ProjectSettings.globalize_path("res://" + ENGINE_DIR + "/" + candidate)
+		if not FileAccess.file_exists(path):
+			continue
+		if candidate == EXE_NAME:
+			break  # 兜底版本无需探测
+		if _probe_engine(path):
+			_exe_name = candidate
+			return path
+		print("Rapfi 引擎探测失败，降级: %s" % candidate)
+	_exe_name = EXE_NAME
 	return ProjectSettings.globalize_path("res://" + ENGINE_DIR + "/" + EXE_NAME)
+
+## 探测引擎变体能否在本机正常运行（发一局快速试探，2.5s 内应手即可用）。
+func _probe_engine(path: String) -> bool:
+	var result := OS.execute_with_pipe(path, PackedStringArray(["--config", "config.toml"]), false)
+	if result.is_empty():
+		return false
+	var io: FileAccess = result["stdio"]
+	var pid: int = result["pid"]
+	var ok := false
+	io.store_line("START 15")
+	io.flush()
+	for i in range(18):  # 等权重加载（最多 900ms），崩溃的变体提前退出
+		if not OS.is_process_running(pid):
+			return false
+		OS.delay_msec(50)
+	io.store_line("INFO timeout_turn 600")
+	io.store_line("INFO thread_num 4")
+	io.flush()
+	OS.delay_msec(100)
+	io.store_line("BEGIN")
+	io.flush()
+	var deadline := Time.get_ticks_msec() + 2500
+	while Time.get_ticks_msec() < deadline:
+		if not OS.is_process_running(pid):
+			break  # 指令集不受支持等导致的崩溃：立即换下一个候选
+		var line := io.get_line()
+		if line != "" and line[0].is_valid_int() and line.contains(","):
+			ok = true
+			break
+		OS.delay_msec(20)
+	io.store_line("END")
+	io.flush()
+	OS.kill(pid)
+	return ok
