@@ -944,6 +944,7 @@ func _build_ui() -> void:
 	add_child(canvas_layer)
 
 	var panel := PanelContainer.new()
+	panel.custom_minimum_size = SIDE_PANEL_SIZE  # 锁定面板宽度：分析文字等不再撑宽/抖动
 	panel.position = Vector2(_board_origin().x + 656.0 + 12.0, SIDE_PANEL_POSITION.y)
 	panel.size = SIDE_PANEL_SIZE
 	_side_panel = panel
@@ -1042,6 +1043,7 @@ func _build_ui() -> void:
 	layout.add_child(_section_label("实时分析"))
 	analysis_label = Label.new()
 	analysis_label.text = "等待引擎响应…"
+	analysis_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART  # 长行折行，防止把面板撑宽（宽度跳动根源）
 	analysis_label.add_theme_font_size_override("font_size", 12)
 	analysis_label.add_theme_color_override("font_color", Color("9db4d8"))
 	analysis_label.add_theme_constant_override("line_spacing", 3)
@@ -2298,6 +2300,9 @@ func _update_analysis_display() -> void:
 			continue
 		var parts := []
 		for c in bl:
+			if parts.size() >= 12:
+				parts.append("…")
+				break
 			if c is Vector2i:
 				parts.append("%s%d" % [char(65 + c.x), c.y + 1])
 		var meta := ""
