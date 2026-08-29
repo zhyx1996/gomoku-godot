@@ -88,7 +88,10 @@ var undo_button: Button
 var stop_button: Button
 var rule_button: Button
 var board_size_button: Button
-var analysis_label: Label
+var _analysis_panel: VBoxContainer       # 分析面板（每指标一行，悬停有说明）
+var _analysis_waiting: Label              # 「等待引擎响应…」占位
+var _analysis_vals: Dictionary = {}       # 指标名 -> 值 Label
+var _analysis_routes: Array = []          # 路线行（值 Label 数组，最多 5 条）
 var think_time_button: Button
 var cand_range_button: Button
 var show_coord_button: Button
@@ -930,7 +933,7 @@ func _difficulty_options() -> Array:
 	var opts := [
 		{"id": 0, "label": "简单 · 约 0.5 秒/手"},
 		{"id": 1, "label": "中等 · 约 1.5 秒/手"},
-		{"id": 2, "label": "困难 · 约 3 秒/手"},
+		{"id": 2, "label": "困难 · 约 5 秒/手（官方同款）"},
 	]
 	if game_mode != GameMode.EVE and _dlc_unlocked:
 		opts.append({"id": 3, "label": "古法编程 · 前瞻搜索"})
@@ -1063,16 +1066,61 @@ func _build_ui() -> void:
 	settings_btn.pressed.connect(_open_settings)
 	layout.add_child(settings_btn)
 
-	# ── 实时分析 ──
-	layout.add_child(_section_label("实时分析"))
-	analysis_label = Label.new()
-	analysis_label.text = "等待引擎响应…"
-	analysis_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART  # 长行折行，防止把面板撑宽（宽度跳动根源）
-	analysis_label.add_theme_font_size_override("font_size", 12)
-	analysis_label.add_theme_color_override("font_color", Color("9db4d8"))
-	analysis_label.add_theme_constant_override("line_spacing", 3)
-	analysis_label.custom_minimum_size = Vector2(0, 70)
-	layout.add_child(analysis_label)
+	# ── 实时分析（每指标一行，悬停查看含义）──
+	layout.add_child(_section_label("实时分析 · 悬停查看说明"))
+	_analysis_panel = VBoxContainer.new()
+	_analysis_panel.add_theme_constant_override("separation", 2)
+	_analysis_panel.custom_minimum_size = Vector2(0, 70)
+	layout.add_child(_analysis_panel)
+	_analysis_waiting = Label.new()
+	_analysis_waiting.text = "等待引擎响应…"
+	_analysis_waiting.add_theme_font_size_override("font_size", 12)
+	_analysis_waiting.add_theme_color_override("font_color", Color("9db4d8"))
+	_analysis_panel.add_child(_analysis_waiting)
+	_analysis_vals.clear()
+	_analysis_routes.clear()
+	var metric_rows := [
+		["搜索深度", "引擎已搜索的层数。数字越大，当前评估越可靠"],
+		["局面评分", "引擎对局面的打分：正数黑棋占优，负数白棋占优"],
+		["胜率", "引擎估算的黑棋获胜概率"],
+		["计算速度", "引擎每秒评估的局面数量"],
+		["已算局面", "本次思考累计计算过的局面总数"],
+	]
+	for mr in metric_rows:
+		var row := HBoxContainer.new()
+		row.tooltip_text = mr[1]
+		row.mouse_filter = Control.MOUSE_FILTER_PASS
+		var nm := Label.new()
+		nm.text = mr[0]
+		nm.custom_minimum_size = Vector2(62, 0)
+		nm.add_theme_font_size_override("font_size", 12)
+		nm.add_theme_color_override("font_color", Color("8fa3c8"))
+		row.add_child(nm)
+		var val := Label.new()
+		val.text = "-"
+		val.add_theme_font_size_override("font_size", 12)
+		val.add_theme_color_override("font_color", Color("dbe4f2"))
+		row.add_child(val)
+		_analysis_panel.add_child(row)
+		_analysis_vals[mr[0]] = val
+	for r in range(5):
+		var rrow := HBoxContainer.new()
+		rrow.tooltip_text = "引擎当前认为的最佳行棋路线（按顺序预测双方落子）"
+		rrow.mouse_filter = Control.MOUSE_FILTER_PASS
+		var rnm := Label.new()
+		rnm.text = "路线%d" % (r + 1)
+		rnm.custom_minimum_size = Vector2(62, 0)
+		rnm.add_theme_font_size_override("font_size", 12)
+		rnm.add_theme_color_override("font_color", Color("8fa3c8"))
+		rrow.add_child(rnm)
+		var rval := Label.new()
+		rval.text = "-"
+		rval.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		rval.add_theme_font_size_override("font_size", 12)
+		rval.add_theme_color_override("font_color", Color("dbe4f2"))
+		rrow.add_child(rval)
+		_analysis_panel.add_child(rrow)
+		_analysis_routes.append(rval)
 
 	# ── 操作（分隔线 + 按钮行，置底）──
 	var divider := ColorRect.new()
@@ -2042,6 +2090,8 @@ func _place_stone(cell: Vector2i) -> void:
 	move_count += 1
 	_move_history.append(cell)
 	_last_place_time = _fx_time  # 触发落子弹入动画
+	_realtime_best = Vector2i(-1, -1)
+	_realtime_lost.clear()
 	if _place_player:
 		_place_player.play()
 
@@ -2315,39 +2365,44 @@ func _on_engine_analysis(data: Dictionary) -> void:
 	_analysis_dirty = true  # 每帧只重建一次面板（重建含文本排版，成本高）
 
 
-## 刷新分析面板显示（含 MultiPV 多点分析）。
+## 刷新分析面板（每指标一行；悬停行可查看含义；数值做万/亿缩写）。
+func _fmt_count(n: int) -> String:
+	if n >= 100000000:
+		return "%.2f亿" % (float(n) / 100000000.0)
+	if n >= 10000:
+		return "%.1f万" % (float(n) / 10000.0)
+	return str(n)
+
+
 func _update_analysis_display() -> void:
-	if analysis_label == null:
+	if _analysis_panel == null:
 		return
-	# 空状态：尚无分析数据
-	if _analysis_data.is_empty() and _pv_list.is_empty():
-		analysis_label.text = "等待引擎响应…"
-		return
+	var has_data := not _analysis_data.is_empty() or not _pv_list.is_empty()
+	_analysis_waiting.visible = not has_data
+
 	var depth := "%s-%s" % [str(_analysis_data.get("depth", "-")), str(_analysis_data.get("seldepth", "-"))]
 	var eval_s: String = str(_analysis_data.get("eval", "-"))
 	var winrate: float = float(_analysis_data.get("winrate", -1.0))
 	var winrate_s := "-"
 	if winrate >= 0.0:
 		winrate_s = "%.1f%%" % (winrate * 100.0)
-	var speed := str(_analysis_data.get("speed", "-"))
-	var nodes := str(_analysis_data.get("totalnodes", _analysis_data.get("nodes", "-")))
+	var speed := int(_analysis_data.get("speed", 0))
+	var nodes := int(_analysis_data.get("totalnodes", _analysis_data.get("nodes", 0)))
 
-	var lines := [
-		"深度 %s" % depth,
-		"估值 %s" % eval_s,
-		"胜率 %s" % winrate_s,
-		"速度 %s" % speed,
-		"节点 %s" % nodes,
-	]
+	_analysis_vals["搜索深度"].text = depth
+	_analysis_vals["局面评分"].text = eval_s
+	_analysis_vals["胜率"].text = winrate_s
+	_analysis_vals["计算速度"].text = (_fmt_count(speed) + "/秒") if speed > 0 else "-"
+	_analysis_vals["已算局面"].text = _fmt_count(nodes) if nodes > 0 else "-"
 
-	# MultiPV 多点分析：每条 PV 一行（估值/胜率 + 最佳线）
+	# 路线（MultiPV 最佳行，每条最多显示 12 手）
 	var shown := 0
 	for entry in _pv_list:
-		if not entry.has("bestline"):
+		if shown >= _analysis_routes.size():
+			break
+		if not entry.has("bestline") or entry["bestline"].is_empty():
 			continue
 		var bl: Array = entry["bestline"]
-		if bl.is_empty():
-			continue
 		var parts := []
 		for c in bl:
 			if parts.size() >= 12:
@@ -2359,15 +2414,11 @@ func _update_analysis_display() -> void:
 		if entry.has("eval"):
 			meta = str(entry["eval"])
 		if entry.has("winrate"):
-			meta += (" " if meta != "" else "") + "%.1f%%" % (float(entry["winrate"]) * 100.0)
-		lines.append("PV%d %s %s" % [shown + 1, meta, " ".join(parts)])
+			meta += " " + "%.1f%%" % (float(entry["winrate"]) * 100.0)
+		_analysis_routes[shown].text = (meta + "  " if meta != "" else "") + " ".join(parts)
 		shown += 1
-		if shown >= 5:
-			break
-	if shown == 0:
-		lines.append("最佳线 -")
-
-	analysis_label.text = "\n".join(lines)
+	for r in range(shown, _analysis_routes.size()):
+		_analysis_routes[r].text = "-"
 
 
 # ============================================================
@@ -3394,12 +3445,16 @@ func _draw_forbid() -> void:
 
 
 func _draw_realtime() -> void:
-	# 思考中引擎当前最佳候选点（金色脉冲环）
-	if _realtime_best.x >= 0:
+	# 思考中的实时最佳候选点（红点，同官方）：引擎每算一轮就更新位置
+	if _realtime_best.x >= 0 and ai_thinking:
 		var center := _cell_to_screen(_realtime_best)
-		var pulse := 0.5 + 0.5 * sin(_fx_time * 8.0)
-		draw_arc(center, _stone_radius() + 4.0 + pulse * 3.0, 0.0, TAU, 48, ACCENT_GOLD, 3.0, true)
-		draw_circle(center, 4.0, Color(ACCENT_GOLD, 0.6 + 0.4 * pulse))
+		var pulse := 0.5 + 0.5 * sin(_fx_time * 7.0)
+		var red := Color("ff4d4d")
+		if _reduced_fx:
+			draw_circle(center, _stone_radius() * 0.4, Color(red, 0.85))
+		else:
+			draw_circle(center, _stone_radius() * (0.30 + 0.06 * pulse), Color(red, 0.9))
+			draw_arc(center, _stone_radius() * (0.5 + 0.12 * pulse), 0.0, TAU, 32, Color(red, 0.35 + 0.3 * pulse), 2.0, true)
 	# 引擎已排除的点（暗红小点）
 	for c in _realtime_lost:
 		draw_circle(_cell_to_screen(c), 3.0, Color("f87171", 0.45))

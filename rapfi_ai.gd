@@ -47,7 +47,7 @@ enum Difficulty { EASY, MEDIUM, HARD }
 const DIFFICULTY_CONFIG := {
 	Difficulty.EASY:   {"strength": 30, "timeout_ms": 500},
 	Difficulty.MEDIUM: {"strength": 70, "timeout_ms": 1500},
-	Difficulty.HARD:   {"strength": 100, "timeout_ms": 3000},
+	Difficulty.HARD:   {"strength": 100, "timeout_ms": 5000},
 }
 
 # ---- 引擎配置状态 ----
@@ -56,7 +56,7 @@ var strength := 70             # 棋力 0~100
 var timeout_turn := 1500       # 每步思考时间（毫秒）
 var threads := 0               # 线程数（0 表示启动时自动设为 CPU 核心数）
 var max_depth := 100           # 最大深度
-var show_detail := 2           # 输出详细度
+var show_detail := 3           # 输出详细度（3=实时+详情，驱动红点与面板）
 var caution_factor := 3        # 选点范围 0~5
 var hash_size := 128           # 置换表大小（MiB）
 var nbest := 1                 # 多点分析数
@@ -599,9 +599,10 @@ func poll_output() -> void:
 		if ok:
 			_web_inited = true
 			_started = true
-			threads = mini(8, maxi(1, OS.get_processor_count()))
-			# 注：实测线程>8 或发送大 TIMEOUT_MATCH 会让 WASM 引擎搜索异常拉长，保持 8 线程
+			# 官方 Gomocalc 同款：线程=硬件线程数一半，总时限给足
+			threads = clampi(int(OS.get_processor_count() / 2.0), 1, 32)
 			_apply_config()
+			_send("INFO TIMEOUT_MATCH 9999000")
 			new_game()
 			# NNUE 预热：首搜需解压 40MB 权重（十余秒），用 10ms 短搜提前触发，
 			# 完成前 is_web_ready()=false（状态栏显示「引擎加载中」，think_async 自动等待）
