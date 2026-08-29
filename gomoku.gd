@@ -531,7 +531,7 @@ func _build_title_classic() -> void:
 	var diff_row := HBoxContainer.new()
 	diff_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_child(diff_row)
-	var difficulty_btn := _make_small_button(_difficulty_label() + " ▾")
+	var difficulty_btn := _make_small_button(_difficulty_label() + " ▼")
 	difficulty_btn.pressed.connect(func(): _show_difficulty_menu(difficulty_btn))
 	diff_row.add_child(difficulty_btn)
 	_title_difficulty_button = difficulty_btn
@@ -634,7 +634,7 @@ func _build_title_v2() -> void:
 
 	var diff_row := HBoxContainer.new()
 	hero.add_child(diff_row)
-	var difficulty_btn := _make_small_button(_difficulty_label() + " ▾")
+	var difficulty_btn := _make_small_button(_difficulty_label() + " ▼")
 	difficulty_btn.pressed.connect(func(): _show_difficulty_menu(difficulty_btn))
 	diff_row.add_child(difficulty_btn)
 	_title_difficulty_button = difficulty_btn
@@ -780,7 +780,7 @@ func _on_title_secret_click() -> void:
 ## 更新标题界面难度按钮显示。
 func _update_title_difficulty() -> void:
 	if _title_difficulty_button != null:
-		_title_difficulty_button.text = _difficulty_label() + " ▾"
+		_title_difficulty_button.text = _difficulty_label() + " ▼"
 
 
 ## 难度文字（含古法编程隐藏档）。
