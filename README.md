@@ -49,7 +49,10 @@ godot --headless --script tests/threat_test.gd --path .
 ```bash
 godot --path . --script tests/screenshot_driver.gd   # 自动驱动标题/棋型流光/胜利特效并截图
 
-## Web 导出
+## Web 导出与部署
+
+推送 master 自动构建并部署到 GitHub Pages（https://zhyx1996.github.io/gomoku-godot/，workflow: deploy-pages.yml）。
+手动导出：
 
 ```bash
 godot --headless --export-release "Web"
