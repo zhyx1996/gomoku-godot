@@ -105,6 +105,8 @@ var ai_white_button: Button
 
 # ---- 分析数据缓存（由引擎回调更新）----
 var _analysis_data := {}
+var _analysis_dirty := false            # 分析面板脏标记：每帧最多重建一次（INFO 风暴下不再拖垮主线程）
+var _engine_retries := 0                # 引擎崩溃重启计数（每局重置）
 var _move_history: Array = []  # 落子历史（用于悔棋）
 var _think_time_index := 0     # 思考时间档位 0快/1中/2慢/3分析
 var _cand_range_index := 3     # 选点范围 0~5
@@ -225,6 +227,9 @@ func _process(delta: float) -> void:
 	_update_particles(delta)
 	_update_win_sparks(delta)
 	_update_toast()
+	if _analysis_dirty and _in_game:
+		_analysis_dirty = false
+		_update_analysis_display()
 	# 胜利连珠：弹性放大后回落（短暂夸张并回归静止）
 	if _in_game and winner != 0 and _win_anim < 1.0:
 		_win_anim = minf(_win_anim + delta * 2.2, 1.0)
@@ -1852,6 +1857,7 @@ func _new_game() -> void:
 	_win_anim = 0.0
 	_shake_start = -1.0
 	_win_sparks.clear()
+	_engine_retries = 0
 	_move_history.clear()
 	_analysis_data.clear()
 	_eval_history.clear()
@@ -2081,7 +2087,18 @@ func _ai_turn() -> void:
 			_place_stone(move)
 		else:
 			push_warning("AI 返回非法落子: %s" % str(move))
-	else:
+	elif winner == 0 and not _stop_pending:
+		# 引擎无应手：进程若已崩溃则重启并重试一次，避免软锁
+		if ai != null and not ai.is_engine_alive():
+			_engine_retries += 1
+			if _engine_retries <= 2:
+				_show_toast("引擎异常，正在重启…")
+				_teardown_ai()
+				_start_ai_and_maybe_first_move()
+				sync_engine_position()
+				_ai_turn_deferred()
+				return
+			_show_toast("引擎多次异常，请开新局")
 		_update_status_text()
 		queue_redraw()
 
@@ -2167,6 +2184,18 @@ func _ai_turn_first() -> void:
 	else:
 		_update_status_text()
 		queue_redraw()
+
+
+## 把当前局面同步给推理引擎（AI 重启后恢复局面用）。
+## 注意：最后一手不入引擎——随后 _ai_turn 会用 TURN 通知引擎应这一手。
+func sync_engine_position() -> void:
+	if ai == null or _move_history.is_empty():
+		return
+	var last: Vector2i = _move_history.back()
+	var last_v: int = board[last.y][last.x]
+	board[last.y][last.x] = 0
+	ai.sync_board(board, ai_color)
+	board[last.y][last.x] = last_v
 
 
 func _update_status_text() -> void:
@@ -2262,7 +2291,7 @@ func _on_engine_analysis(data: Dictionary) -> void:
 			_eval_history.append(e.to_int())
 			if _eval_history.size() > 60:
 				_eval_history.pop_front()
-	_update_analysis_display()
+	_analysis_dirty = true  # 每帧只重建一次面板（重建含文本排版，成本高）
 
 
 ## 刷新分析面板显示（含 MultiPV 多点分析）。

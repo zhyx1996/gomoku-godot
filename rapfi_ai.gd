@@ -232,6 +232,13 @@ func stop() -> void:
 	_started = false
 
 
+## 引擎进程是否仍然存活（Web 端视为存活）。
+func is_engine_alive() -> bool:
+	if IS_WEB:
+		return _started
+	return _pid != -1 and OS.is_process_running(_pid)
+
+
 ## 让 AI 执先手（棋盘为空时调用）。返回 AI 落子坐标。
 func think_first() -> Vector2i:
 	if not _started or _stdio == null:
@@ -344,12 +351,21 @@ func sync_board(board: Array, ai_color: int) -> void:
 func _wait_coord() -> Vector2i:
 	var timeout_ms: int = timeout_turn + 8000
 	var deadline: int = Time.get_ticks_msec() + timeout_ms
+
 	while Time.get_ticks_msec() < deadline:
-		var line := _stdio.get_line()
-		if line != "":
+		# 先把管道读空再等待：引擎 show_detail=2 时每秒产出数千行 INFO，
+		# 若每读一行就 sleep(10ms)，管道写满会让引擎搜索被限速（50ms 的搜索被拖到 3.4s）
+		var got_line := false
+		while true:
+			var line := _stdio.get_line()
+			if line == "":
+				break
+			got_line = true
 			var handled: Variant = _handle_output_line(line)
 			if handled is Vector2i:
 				return handled
+		if got_line:
+			continue
 		elif _stop_requested and Time.get_ticks_msec() > deadline - timeout_ms + 1200:
 			break
 		_wait_msec(10)
