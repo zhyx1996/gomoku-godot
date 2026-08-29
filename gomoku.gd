@@ -3,8 +3,20 @@ extends Node2D
 var board_size := 15               # 棋盘大小（可变，5~22）
 const CELL_SIZE := 40.0
 const BOARD_PADDING := Vector2(48, 48)
-const SIDE_PANEL_POSITION := Vector2(672, 24)
+const SIDE_PANEL_POSITION := Vector2(672, 24)  # 基准 960x720 下的位置（实际由 _board_origin 推算）
 const SIDE_PANEL_SIZE := Vector2(264, 624)
+
+## 棋盘绘制原点：把「棋盘+侧栏」整组在视口内水平居中（expand 拉伸下的自适应；窄窗口贴左）。
+func _board_origin() -> Vector2:
+	var vp := get_viewport_rect().size
+	# 组宽 = 棋盘 656（左右 padding 48 + 14 格 x40）+ 间隙 12 + 面板 264
+	return Vector2(maxf(24.0, (vp.x - 932.0) * 0.5), BOARD_PADDING.y)
+
+
+## 窗口尺寸变化：侧栏跟随棋盘组的新位置。
+func _on_viewport_resized() -> void:
+	if _side_panel != null and is_instance_valid(_side_panel):
+		_side_panel.position = Vector2(_board_origin().x + 656.0 + 12.0, SIDE_PANEL_POSITION.y)
 const STONE_RADIUS := 16.0
 const STAR_POINT_RADIUS := 3.5
 
@@ -15,7 +27,7 @@ func _board_span() -> float:
 
 ## 动态格距：大棋盘自动缩小，避免与右侧面板重叠（面板起点 684，棋盘起点 48）。
 func _cell_size() -> float:
-	var max_span := SIDE_PANEL_POSITION.x - BOARD_PADDING.x  # 636
+	var max_span := 636.0  # 基准：面板左缘(672) - 边距(24) - 原点(48) = 600+36，各分辨率下棋盘组居中后不变
 	return minf(CELL_SIZE, max_span / (float(board_size) - 0.5))
 
 
@@ -142,13 +154,14 @@ var _plaque_ref: PanelContainer = null   # 标题牌匾（入场动画/裁切光
 var _sheen_rect: ColorRect = null        # 牌匾玻璃斜向流光带
 var _win_center: CenterContainer = null  # 胜利卡片响应式居中容器
 var _win_card: PanelContainer = null     # 胜利横幅玻璃卡片
-var _ui_style := 0                       # 界面风格 0=经典 1=流光（重设计的标题界面+紫金配色）
+var _ui_style := 1                       # 界面风格 0=经典 1=流光（默认；标题右下角或设置里可切回经典）
 var _ui_style_button: Button = null      # 设置弹窗「界面风格」按钮
 var _title_glow_colors: Array = [ACCENT_CYAN, Color("bfe9ff")]  # 标题流光字循环色板
 var _threat_origin := Vector2i(-1, -1)   # 触发制胜棋型的落子点（流光折线分组锚点）
 var _win_sparks: Array = []              # 获胜火花粒子（拖尾光点，带重力）
 var _shake_start := -1.0                 # 胜利震屏起始时刻（<0 关闭）
 var _win_sheen: ColorRect = null         # 胜利卡片玻璃扫光带
+var _side_panel: PanelContainer = null   # 对局侧栏（窗口尺寸变化时重新定位）
 const WIN_SHAKE_DUR := 0.32              # 震屏时长
 
 # ---- 分析状态（引擎回调更新）----
@@ -547,126 +560,132 @@ func _build_title_classic() -> void:
 	box.add_child(credit)
 
 
-## 流光标题界面（新设计）：极光幕帘背景 + 大字流光标题 + 紫金配色菜单。
+## 流光标题界面 v3：非对称 hero（左文右装饰棋盘）+ 逐项入场动画 + 紫金配色。
 func _build_title_v2() -> void:
 	_title_glow_colors = [Color("a78bfa"), Color("e9d5ff"), ACCENT_GOLD]
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_title_layer.add_child(center)
+	var vp := get_viewport_rect().size
+	var wide := vp.x >= 900.0
 
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 14)
-	center.add_child(box)
+	var wrap := MarginContainer.new()
+	wrap.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	wrap.add_theme_constant_override("margin_left", int(vp.x * 0.075) if wide else 28)
+	wrap.add_theme_constant_override("margin_right", 28)
+	_title_layer.add_child(wrap)
 
-	# 入场：整组淡入上浮
-	box.modulate.a = 0.0
-	var intro := box.create_tween()
-	intro.tween_interval(0.05)
-	intro.tween_callback(func(): box.reset_size())
-	intro.tween_property(box, "modulate:a", 1.0, 0.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	var hero := VBoxContainer.new()
+	hero.alignment = BoxContainer.ALIGNMENT_CENTER
+	hero.add_theme_constant_override("separation", 10)
+	wrap.add_child(hero)
 
-	# 顶部小字眉题
+	# 眉题
 	var overline := Label.new()
-	overline.text = "G O M O K U"
-	overline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	overline.add_theme_font_size_override("font_size", 13)
+	overline.text = "G O M O K U · 五 子 连 珠"
+	overline.add_theme_font_size_override("font_size", 14)
 	overline.add_theme_color_override("font_color", Color(_accent2(), 0.85))
-	box.add_child(overline)
+	hero.add_child(overline)
 
-	# 主标题（呼吸流光字由 _process 驱动；点击解锁彩蛋）
+	# 主标题（流光字 / 彩蛋入口）
 	var title := Button.new()
 	title.text = "五子棋"
-	title.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 92)
+	title.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	title.add_theme_font_size_override("font_size", 104)
 	title.add_theme_color_override("font_outline_color", Color(0.05, 0.02, 0.12, 0.9))
-	title.add_theme_constant_override("outline_size", 12)
+	title.add_theme_constant_override("outline_size", 14)
 	title.add_theme_color_override("font_color", Color("a78bfa"))
 	title.add_theme_color_override("font_hover_color", Color("f3e8ff"))
 	title.add_theme_color_override("font_pressed_color", Color("a78bfa"))
 	_title_glow_label = title
 	_style_ghost_button(title)
 	title.pressed.connect(_on_title_secret_click)
-	box.add_child(title)
+	hero.add_child(title)
 
-	# 分隔饰线：─ ◆ ─
-	var deco_row := HBoxContainer.new()
-	deco_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	deco_row.add_theme_constant_override("separation", 12)
-	box.add_child(deco_row)
-	for side in range(2):
-		var bar := ColorRect.new()
-		bar.color = Color(_accent2(), 0.45)
-		bar.custom_minimum_size = Vector2(86, 1)
-		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		deco_row.add_child(bar)
-		if side == 0:
-			var gem := Label.new()
-			gem.text = "◆"
-			gem.add_theme_font_size_override("font_size", 11)
-			gem.add_theme_color_override("font_color", Color(_accent2(), 0.9))
-			deco_row.add_child(gem)
+	# 金色短杠（入场生长）
+	var bar_row := HBoxContainer.new()
+	hero.add_child(bar_row)
+	var bar := ColorRect.new()
+	bar.color = Color(_accent2(), 0.9)
+	bar.custom_minimum_size = Vector2(0, 3)
+	bar_row.add_child(bar)
 
-	# 副标语（彩蛋解锁提示会改写）
 	var sub := Label.new()
 	sub.text = "五子连珠 · 妙手对弈"
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_font_size_override("font_size", 16)
 	sub.add_theme_color_override("font_color", Color("b3a5d8"))
-	box.add_child(sub)
+	hero.add_child(sub)
 	_subtitle_label = sub
 
 	var sub_note := Label.new()
 	sub_note.text = ""
-	sub_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub_note.add_theme_font_size_override("font_size", 11)
 	sub_note.add_theme_color_override("font_color", Color("8f86ad"))
-	box.add_child(sub_note)
+	hero.add_child(sub_note)
 	_subtitle_note = sub_note
 
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(0, 20)
-	box.add_child(gap)
+	hero.add_child(gap)
 
-	# 主 CTA：紫罗兰实心 + 辉光投影
 	var pve := _make_menu_button("人机对战")
-	pve.custom_minimum_size = Vector2(300, 52)
+	pve.custom_minimum_size = Vector2(280, 52)
 	pve.add_theme_font_size_override("font_size", 17)
 	_style_primary_button(pve)
 	pve.pressed.connect(func(): _start_game(GameMode.PVE))
-	box.add_child(pve)
+	hero.add_child(pve)
 
 	var diff_row := HBoxContainer.new()
-	diff_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_child(diff_row)
+	hero.add_child(diff_row)
 	var difficulty_btn := _make_small_button(_difficulty_label() + " ▾")
 	difficulty_btn.pressed.connect(func(): _show_difficulty_menu(difficulty_btn))
 	diff_row.add_child(difficulty_btn)
 	_title_difficulty_button = difficulty_btn
 
 	var pvp := _make_menu_button("双人对战")
-	pvp.custom_minimum_size = Vector2(300, 48)
+	pvp.custom_minimum_size = Vector2(280, 46)
 	pvp.pressed.connect(func(): _start_game(GameMode.PVP))
-	box.add_child(pvp)
+	hero.add_child(pvp)
 
 	var eve := _make_menu_button("！？机机？！对战")
-	eve.custom_minimum_size = Vector2(300, 48)
+	eve.custom_minimum_size = Vector2(280, 46)
 	eve.pressed.connect(func(): _start_game(GameMode.EVE))
 	eve.visible = _dlc_unlocked
-	box.add_child(eve)
+	hero.add_child(eve)
 	_title_eve_button = eve
 
 	var settings_btn := _make_menu_button("设置")
-	settings_btn.custom_minimum_size = Vector2(300, 48)
+	settings_btn.custom_minimum_size = Vector2(280, 46)
 	settings_btn.pressed.connect(_open_settings)
 	_style_ghost_outline_button(settings_btn)
-	box.add_child(settings_btn)
+	hero.add_child(settings_btn)
 
+	# 逐项入场（淡入 + 依次错峰）；子项水平收缩靠左（避免被 VBox 拉满整屏宽）
+	var idx := 0
+	for c in hero.get_children():
+		if not (c is Control):
+			continue
+		c.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		c.modulate.a = 0.0
+		var tw := c.create_tween()
+		tw.tween_interval(0.04 + 0.045 * idx)
+		tw.tween_property(c, "modulate:a", 1.0, 0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		idx += 1
+	var grow := bar.create_tween()
+	grow.tween_interval(0.3)
+	grow.tween_method(func(v: float): bar.custom_minimum_size = Vector2(v, 3), 0.0, 96.0, 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	# 页脚署名（左下）
 	var credit := Label.new()
 	credit.text = "Rapfi AI · NNUE 神经网络"
-	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	credit.add_theme_font_size_override("font_size", 11)
 	credit.add_theme_color_override("font_color", Color("7d7398"))
-	box.add_child(credit)
+	credit.anchor_left = 0.0
+	credit.anchor_top = 1.0
+	credit.anchor_right = 0.0
+	credit.anchor_bottom = 1.0
+	credit.offset_left = 24
+	credit.offset_top = -42
+	credit.offset_right = 264
+	credit.offset_bottom = -20
+	_title_layer.add_child(credit)
 
 
 func _make_menu_button(text: String) -> Button:
@@ -925,8 +944,11 @@ func _build_ui() -> void:
 	add_child(canvas_layer)
 
 	var panel := PanelContainer.new()
-	panel.position = SIDE_PANEL_POSITION
+	panel.position = Vector2(_board_origin().x + 656.0 + 12.0, SIDE_PANEL_POSITION.y)
 	panel.size = SIDE_PANEL_SIZE
+	_side_panel = panel
+	if not get_viewport().size_changed.is_connected(_on_viewport_resized):
+		get_viewport().size_changed.connect(_on_viewport_resized)
 	canvas_layer.add_child(panel)
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.10, 0.08, 0.18, 0.80) if _ui_style == 1 else Color(0.07, 0.10, 0.17, 0.78)
@@ -1575,7 +1597,7 @@ func _load_settings() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(SETTINGS_PATH) != OK:
 		return
-	_ui_style = clampi(int(cf.get_value("ui", "style", 0)), 0, 1)
+	_ui_style = clampi(int(cf.get_value("ui", "style", 1)), 0, 1)
 	_theme_index = clampi(int(cf.get_value("ui", "theme", 0)), 0, 2)
 	_reduced_fx = bool(cf.get_value("ui", "reduced_fx", false))
 	_rule_index = clampi(int(cf.get_value("game", "rule", 0)), 0, 2)
@@ -2764,14 +2786,14 @@ func _make_win_sound() -> AudioStreamWAV:
 # ============================================================
 func _screen_to_cell(mouse_position: Vector2) -> Vector2i:
 	var cs := _cell_size()
-	var min_point := BOARD_PADDING - Vector2.ONE * (cs * 0.5)
-	var max_point := BOARD_PADDING + Vector2.ONE * _board_span() + Vector2.ONE * (cs * 0.5)
+	var min_point := _board_origin() - Vector2.ONE * (cs * 0.5)
+	var max_point := _board_origin() + Vector2.ONE * _board_span() + Vector2.ONE * (cs * 0.5)
 	if mouse_position.x < min_point.x or mouse_position.y < min_point.y:
 		return Vector2i(-1, -1)
 	if mouse_position.x > max_point.x or mouse_position.y > max_point.y:
 		return Vector2i(-1, -1)
 
-	var scaled := (mouse_position - BOARD_PADDING) / cs
+	var scaled := (mouse_position - _board_origin()) / cs
 	var cell := Vector2i(roundi(scaled.x), roundi(scaled.y))
 	if not _is_inside_board(cell):
 		return Vector2i(-1, -1)
@@ -2781,7 +2803,7 @@ func _screen_to_cell(mouse_position: Vector2) -> Vector2i:
 
 
 func _cell_to_screen(cell: Vector2i) -> Vector2:
-	return BOARD_PADDING + Vector2(cell.x, cell.y) * _cell_size()
+	return _board_origin() + Vector2(cell.x, cell.y) * _cell_size()
 
 
 func _is_inside_board(cell: Vector2i) -> bool:
@@ -2840,6 +2862,7 @@ func _draw_background() -> void:
 	# 流光界面：标题幕帘极光
 	if _ui_style == 1 and not _in_game:
 		_draw_aurora(size)
+		_draw_title_board()
 
 
 ## 极光幕帘：三条缓慢流动的正弦光带（低透明度叠加，作流光标题的背景签名）。
@@ -2866,12 +2889,74 @@ func _draw_aurora(size: Vector2) -> void:
 			pts.append(Vector2(x, y))
 		draw_polyline(pts, Color(rb["color"], float(rb["alpha"])), float(rb["width"]))
 
+## 流光标题右侧的装饰棋盘：透视网格 + 星位 + 棋子 + 流光巡线（纯绘制，无交互）。
+func _draw_title_board() -> void:
+	var vp := get_viewport_rect().size
+	if vp.x < 900.0:
+		return
+	var reduced := _reduced_fx
+	var cx := vp.x * 0.72
+	var cy := vp.y * 0.52 + (0.0 if reduced else sin(_fx_time * 0.5) * 6.0)
+	var R := minf(vp.y * 0.34, vp.x * 0.20)
+	var n := 10
+	# 底部椭圆光晕
+	draw_set_transform(Vector2(cx, cy), 0.0, Vector2(1.0, 0.42))
+	draw_circle(Vector2.ZERO, R * 1.7, Color(0.45, 0.36, 0.85, 0.10))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# 梯形四角（俯视透视：上宽下窄）
+	var tl := Vector2(cx - R * 0.92, cy - R * 0.60)
+	var tr := Vector2(cx + R * 0.92, cy - R * 0.60)
+	var br := Vector2(cx + R * 0.74, cy + R * 0.60)
+	var bl := Vector2(cx - R * 0.74, cy + R * 0.60)
+	var grid := Color(0.55, 0.47, 0.85, 0.16)
+	for i in range(n + 1):
+		var f := float(i) / float(n)
+		draw_line(tl.lerp(tr, f), bl.lerp(br, f), grid, 1.0)
+		draw_line(tl.lerp(bl, f), tr.lerp(br, f), grid, 1.0)
+	draw_polyline(PackedVector2Array([tl, tr, br, bl, tl]), Color(0.62, 0.53, 0.92, 0.30), 1.6)
+	# 网格交点
+	var gp := func(i: int, j: int) -> Vector2:
+		var fi := float(i) / float(n)
+		var gj := float(j) / float(n)
+		return tl.lerp(tr, fi).lerp(bl.lerp(br, fi), gj)
+	# 星位
+	for s in [[3, 3], [7, 3], [3, 7], [7, 7], [5, 5]]:
+		draw_circle(gp.call(s[0], s[1]), 2.4, Color(0.62, 0.53, 0.92, 0.35))
+	# 棋子（扁平椭圆）
+	var stones := [[3, 4, 1], [4, 4, 2], [4, 3, 1], [5, 5, 2], [6, 6, 1], [2, 6, 2]]
+	for st in stones:
+		var p: Vector2 = gp.call(st[0], st[1])
+		var black: bool = st[2] == 1
+		draw_set_transform(p + Vector2(2.5, 4.0), 0.0, Vector2(1.0, 0.78))
+		draw_circle(Vector2.ZERO, R * 0.062, Color(0, 0, 0, 0.35))
+		draw_set_transform(p, 0.0, Vector2(1.0, 0.78))
+		draw_circle(Vector2.ZERO, R * 0.062, Color(0.05, 0.07, 0.12) if black else Color(0.90, 0.93, 0.98))
+		draw_circle(p + Vector2(-R * 0.014, -R * 0.016), R * 0.016, Color(1, 1, 1, 0.5 if black else 0.85))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# 高亮子脉冲环
+	var hl: Vector2 = gp.call(4, 3)
+	var pr := R * 0.085 + (0.0 if reduced else sin(_fx_time * 2.4) * R * 0.012)
+	draw_set_transform(hl, 0.0, Vector2(1.0, 0.78))
+	draw_arc(Vector2.ZERO, pr, 0.0, TAU, 40, Color(ACCENT_GOLD, 0.6), 2.0, true)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# 流光巡线：亮珠带拖尾沿横线巡游
+	if not reduced:
+		var a: Vector2 = gp.call(3, 3)
+		var b2: Vector2 = gp.call(7, 3)
+		var phase := fposmod(_fx_time * 0.35, 1.0)
+		var head: Vector2 = a.lerp(b2, phase)
+		for k in range(6):
+			var u := clampf(phase - 0.06 * float(k), 0.0, 1.0)
+			var q: Vector2 = a.lerp(b2, u)
+			draw_circle(q, R * 0.02 * (1.0 - float(k) / 6.0) + 1.0, Color(ACCENT_GOLD, 0.5 * (1.0 - float(k) / 6.0)))
+		draw_circle(head, R * 0.024 + 1.0, Color(1.0, 0.97, 0.85, 0.95))
+
 
 func _draw_board() -> void:
 	var cs := _cell_size()
 	# 棋盘外框（带圆角感的双层）
 	var board_rect := Rect2(
-		BOARD_PADDING - Vector2.ONE * (cs * 0.5),
+		_board_origin() - Vector2.ONE * (cs * 0.5),
 		Vector2(_board_span() + cs, _board_span() + cs)
 	)
 	# 外发光
@@ -2885,14 +2970,14 @@ func _draw_board() -> void:
 	for index in range(board_size):
 		var offset := index * cs
 		draw_line(
-			BOARD_PADDING + Vector2(offset, 0),
-			BOARD_PADDING + Vector2(offset, _board_span()),
+			_board_origin() + Vector2(offset, 0),
+			_board_origin() + Vector2(offset, _board_span()),
 			_cur_grid,
 			1.5
 		)
 		draw_line(
-			BOARD_PADDING + Vector2(0, offset),
-			BOARD_PADDING + Vector2(_board_span(), offset),
+			_board_origin() + Vector2(0, offset),
+			_board_origin() + Vector2(_board_span(), offset),
 			_cur_grid,
 			1.5
 		)
@@ -2922,11 +3007,11 @@ func _draw_board() -> void:
 		for i in range(board_size):
 			# 横向字母（A~）
 			var letter := char(65 + i)
-			var top_pos := BOARD_PADDING + Vector2(i * cs, -30)
+			var top_pos := _board_origin() + Vector2(i * cs, -30)
 			draw_string(font, top_pos, letter, HORIZONTAL_ALIGNMENT_CENTER, -1, 12, coord_color)
 			# 纵向数字（1~）
 			var num := str(i + 1)
-			var left_pos := BOARD_PADDING + Vector2(-34, i * cs + 4)
+			var left_pos := _board_origin() + Vector2(-34, i * cs + 4)
 			draw_string(font, left_pos, num, HORIZONTAL_ALIGNMENT_CENTER, -1, 12, coord_color)
 
 
@@ -3400,14 +3485,14 @@ func _draw_win_glow() -> void:
 func _draw_eval_chart() -> void:
 	if _eval_history.size() < 2 or not _show_eval:
 		return
-	var chart_y := BOARD_PADDING.y + _board_span() + _cell_size() + 30
+	var chart_y := _board_origin().y + _board_span() + _cell_size() + 30
 	var chart_w := _board_span()
 	var chart_h := 80.0
 	# 收进视口，避免底部被裁切
 	var vp_h := get_viewport_rect().size.y
 	if chart_y + chart_h > vp_h - 8.0:
 		chart_h = maxf(24.0, vp_h - 8.0 - chart_y)
-	var chart_pos := Vector2(BOARD_PADDING.x, chart_y)
+	var chart_pos := Vector2(_board_origin().x, chart_y)
 
 	# 背景
 	draw_rect(Rect2(chart_pos, Vector2(chart_w, chart_h)), Color(_cur_board, 0.6))
