@@ -68,6 +68,8 @@ var _stderr: FileAccess = null
 var _difficulty: int = Difficulty.MEDIUM
 var _started := false
 var _web_ready := false          # 网页端：引擎已加载并完成初始化
+var _web_warming := false        # 网页端：NNUE 预热搜索进行中（首搜需解压 40MB 权重）
+var _web_inited := false         # 网页端：引擎实例已就绪并完成首配（与预热完成区分）
 var _web_load_started := false   # 网页端：引擎加载已发起（全局防重复）
 var _stop_requested := false     # 已请求停止当前思考（用于让异步 await 返回 -1）
 var _think_thread: Thread = null      # 原生端：后台思考线程（主线程保持流畅）
@@ -239,6 +241,8 @@ func stop() -> void:
 		# 不发 END：已加载实例保留（新局会重置棋盘），页面关闭由浏览器回收
 		_started = false
 		_web_ready = false
+		_web_inited = false
+		_web_warming = false
 		return
 	if _pid != -1:
 		if _stdio != null:
@@ -550,8 +554,7 @@ func _send_board(board: Array, ai_color: int) -> void:
 ## 清空引擎当前已产生的 stdout 输出。
 func _drain() -> void:
 	if IS_WEB:
-		while _poll_line() != "":
-			pass
+		_poll_lines()
 		return
 	if _stdio == null:
 		return
@@ -572,37 +575,54 @@ func _send(cmd: String) -> void:
 		_stdio.flush()
 
 
-## 从引擎读取一行输出（网页走 JS 队列，原生走管道）。
-func _poll_line() -> String:
+## 从引擎批量读取输出（网页走 JS 队列一次取空，原生走管道单行）。
+func _poll_lines() -> PackedStringArray:
 	if IS_WEB:
-		return str(JavaScriptBridge.eval("window.RapfiBridge ? window.RapfiBridge.poll() : ''"))
+		var all := str(JavaScriptBridge.eval("window.RapfiBridge ? window.RapfiBridge.pollAll() : ''"))
+		if all == "":
+			return PackedStringArray()
+		return all.split("\n")
 	if _stdio == null:
-		return ""
-	return _stdio.get_line()
+		return PackedStringArray()
+	var line := _stdio.get_line()
+	if line == "":
+		return PackedStringArray()
+	return PackedStringArray([line])
 
 
 ## 网页端每帧轮询：引擎就绪后完成初始化；处理输出；收到走法时发信号。
 func poll_output() -> void:
 	if not IS_WEB:
 		return
-	if not _web_ready:
+	if not _web_inited:
 		var ok: bool = JavaScriptBridge.eval("window.RapfiBridge ? window.RapfiBridge.isReady() : false")
 		if ok:
-			_web_ready = true
+			_web_inited = true
 			_started = true
 			threads = mini(8, maxi(1, OS.get_processor_count()))
 			# 注：实测线程>8 或发送大 TIMEOUT_MATCH 会让 WASM 引擎搜索异常拉长，保持 8 线程
 			_apply_config()
 			new_game()
-			web_ready.emit()
+			# NNUE 预热：首搜需解压 40MB 权重（十余秒），用 10ms 短搜提前触发，
+			# 完成前 is_web_ready()=false（状态栏显示「引擎加载中」，think_async 自动等待）
+			_web_warming = true
+			_send("INFO timeout_turn 10")
+			_send("BEGIN")
 		else:
 			return
-	while true:
-		var line := _poll_line()
-		if line == "":
-			break
+	elif _web_warming:
+		return  # 预热搜索中：本帧不处理输出（出子后在下方标记完成）
+	for line in _poll_lines():
 		var handled: Variant = _handle_output_line(line)
 		if handled is Vector2i:
+			if _web_warming:
+				# 预热搜索出子：恢复配置并宣布就绪（该子无人监听，丢弃）
+				_web_warming = false
+				_web_ready = true
+				_apply_config()
+				new_game()
+				web_ready.emit()
+				continue
 			move_ready.emit(handled)
 
 
