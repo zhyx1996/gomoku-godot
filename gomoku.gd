@@ -109,7 +109,8 @@ var ai_white_button: Button
 # ---- 分析数据缓存（由引擎回调更新）----
 var _analysis_data := {}
 var _analysis_dirty := false            # 分析面板脏标记：每帧最多重建一次（INFO 风暴下不再拖垮主线程）
-var _engine_retries := 0                # 引擎崩溃重启计数（每局重置）
+var _engine_retries := 0                # 引擎重启计数：应手正常即清零，新局重置
+var _pending_difficulty := -1           # 思考中挂起的难度切换（AI 本手结束后生效；搜索中下发配置会让引擎丢弃搜索）
 var _move_history: Array = []  # 落子历史（用于悔棋）
 var _think_time_index := 0     # 思考时间档位 0快/1中/2慢/3分析
 var _cand_range_index := 3     # 选点范围 0~5
@@ -945,24 +946,14 @@ func _on_difficulty_option(id: int) -> void:
 	if _difficulty_menu != null:
 		_difficulty_menu.hide()
 	_set_difficulty_open(false)
-	if game_mode == GameMode.EVE:
-		_eve_difficulty = id
-	elif id == 3:
-		_classic_mode = true
-	else:
-		_classic_mode = false
-		ai_difficulty = id
-	_refresh_buttons()
-	_update_title_difficulty()
-	_save_settings()
-	if _in_game:
-		# 热切换：对局中即时调整引擎强度/时限，当前棋局继续
-		if ai != null:
-			if game_mode == GameMode.EVE:
-				ai.set_difficulty(_eve_difficulty)
-			elif not _classic_mode:
-				ai.set_difficulty(ai_difficulty)
+	if _in_game and ai_thinking and ai != null:
+		# 思考中：整套设置挂起，等 AI 本手结束再生效。
+		# 此刻下发配置会让引擎丢弃当前搜索；此刻改状态会让进行中的那一手与新设置错位。
+		_pending_difficulty = id
+		_show_toast("难度将在 AI 本手结束后生效")
 		_update_status_text()
+		return
+	_apply_difficulty(id)
 
 
 func _build_ui() -> void:
@@ -1927,6 +1918,7 @@ func _new_game() -> void:
 	_shake_start = -1.0
 	_win_sparks.clear()
 	_engine_retries = 0
+	_pending_difficulty = -1
 	_move_history.clear()
 	_analysis_data.clear()
 	_eval_history.clear()
@@ -2158,9 +2150,11 @@ func _ai_turn() -> void:
 			_place_stone(move)
 		else:
 			push_warning("AI 返回非法落子: %s" % str(move))
+		_engine_retries = 0  # 应手正常，恢复重启额度（否则两次故障会永久关闭自愈）
+		_apply_pending_difficulty()  # 思考中挂起的难度切换在本手结束后生效
 	elif winner == 0 and not _stop_pending:
-		# 引擎无应手：进程若已崩溃则重启并重试一次，避免软锁
-		if ai != null and not ai.is_engine_alive():
+		# 引擎无应手（超时或崩溃）：重启引擎、回放局面并重试，避免软锁
+		if ai != null:
 			_engine_retries += 1
 			if _engine_retries <= 2:
 				_show_toast("引擎异常，正在重启…")
@@ -2256,6 +2250,36 @@ func _ai_turn_first() -> void:
 		_update_status_text()
 		queue_redraw()
 
+
+## 应用思考中挂起的难度切换（AI 本手结束后调用，此刻不在搜索中，可安全下发完整配置）。
+func _apply_pending_difficulty() -> void:
+	if _pending_difficulty < 0:
+		return
+	var id := _pending_difficulty
+	_pending_difficulty = -1
+	_apply_difficulty(id)
+	_show_toast("难度已切换：%s" % _difficulty_label())
+
+
+## 整套难度设置一次性应用：状态 → 按钮/存档 → 引擎。
+## 挂起与非挂起路径共用，保证「进行中的那一手」始终对应它开始时的设置。
+func _apply_difficulty(id: int) -> void:
+	if game_mode == GameMode.EVE:
+		_eve_difficulty = id
+	elif id == 3:
+		_classic_mode = true
+	else:
+		_classic_mode = false
+		ai_difficulty = id
+	_refresh_buttons()
+	_update_title_difficulty()
+	_save_settings()
+	if ai == null:
+		return
+	if game_mode == GameMode.EVE:
+		ai.set_difficulty(_eve_difficulty)
+	elif not _classic_mode:
+		ai.set_difficulty(ai_difficulty)
 
 ## 把当前局面同步给推理引擎（AI 重启后恢复局面用）。
 ## 注意：最后一手不入引擎——随后 _ai_turn 会用 TURN 通知引擎应这一手。

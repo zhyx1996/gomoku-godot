@@ -179,10 +179,15 @@ func new_game() -> bool:
 
 
 ## 更新难度参数（引擎复用时不重启进程）。
+## 必须在「不在搜索中」时调用：完整配置含 THREAD_NUM/HASH_SIZE 等重分配型参数，
+## 搜索中下发会让引擎丢弃当前搜索（软锁根因）。
+## 预热中只记录数值，预热完成后的 _apply_config 会自动带上最新值。
 func set_difficulty(difficulty: int) -> void:
 	_difficulty = difficulty
 	strength = DIFFICULTY_CONFIG[difficulty]["strength"]
 	timeout_turn = DIFFICULTY_CONFIG[difficulty]["timeout_ms"]
+	if _web_warming:
+		return
 	_apply_config()
 
 
