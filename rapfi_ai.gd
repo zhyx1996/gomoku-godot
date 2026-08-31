@@ -111,8 +111,6 @@ func start(difficulty: int = Difficulty.MEDIUM) -> bool:
 		return true
 
 	stop()  # 原生：清掉旧进程
-
-	stop()  # 原生：清掉旧进程
 	var exe_path := _resolve_engine_path()
 	if exe_path == "" or not FileAccess.file_exists(exe_path):
 		push_error("Rapfi 引擎不存在: %s" % exe_path)
@@ -604,8 +602,8 @@ func poll_output() -> void:
 		if ok:
 			_web_inited = true
 			_started = true
-			# 官方 Gomocalc 同款：线程=硬件线程数一半，总时限给足
-			threads = clampi(int(OS.get_processor_count() / 2.0), 1, 32)
+			# 实测线程>8 会让 WASM 搜索吞吐暴跌（32 核机 16 线程仅 7 万 nps、8 线程 116 万+），上限保持 8
+			threads = mini(8, maxi(1, OS.get_processor_count()))
 			_apply_config()
 			_send("INFO TIMEOUT_MATCH 9999000")
 			new_game()
