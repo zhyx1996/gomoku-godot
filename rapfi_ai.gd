@@ -199,7 +199,8 @@ func set_config(key: String, value: int) -> void:
 		"timeout_turn":
 			timeout_turn = value
 		"threads":
-			threads = value
+			# 网页端 >8 线程实测吞吐暴跌（依据见 poll_output 初始化注释），手动/自动档一并封顶
+			threads = mini(8, value) if IS_WEB else value
 		"max_depth":
 			max_depth = value
 		"show_detail":
@@ -607,10 +608,12 @@ func poll_output() -> void:
 			_apply_config()
 			_send("INFO TIMEOUT_MATCH 9999000")
 			new_game()
-			# NNUE 预热：首搜需解压 40MB 权重（十余秒），用 10ms 短搜提前触发，
+			# NNUE 预热：首搜需解压 40MB 权重（十余秒），用短搜提前触发。
+			# 预算给足 1s：除解压权重外，还要让引擎铺开 WASM worker 线程池——
+			# 10ms 短搜铺不开，线程池开销会落到对局第一手（实测首搜 nps 仅为稳态 1/3）。
 			# 完成前 is_web_ready()=false（状态栏显示「引擎加载中」，think_async 自动等待）
 			_web_warming = true
-			_send("INFO timeout_turn 10")
+			_send("INFO timeout_turn 1000")
 			_send("BEGIN")
 		else:
 			return

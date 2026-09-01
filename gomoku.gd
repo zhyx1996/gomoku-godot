@@ -2133,6 +2133,7 @@ func _ai_turn() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+	_reset_analysis()
 	# 原生/网页统一走异步：引擎在后台线程思考，主线程持续渲染与响应
 	var move: Vector2i = await ai.think_async(last_move)
 	ai_thinking = false
@@ -2230,6 +2231,7 @@ func _ai_turn_first() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+	_reset_analysis()
 	var move: Vector2i = await ai.think_first_async()
 	ai_thinking = false
 
@@ -2389,6 +2391,15 @@ func _on_engine_analysis(data: Dictionary) -> void:
 			if _eval_history.size() > 60:
 				_eval_history.pop_front()
 	_analysis_dirty = true  # 每帧只重建一次面板（重建含文本排版，成本高）
+
+
+## 每手搜索开始前重置分析面板状态。
+## _pv_entry 按槽位惰性创建且跨搜索累积，不清空的话旧搜索写过的路线行会一直挂着上上手的估值。
+func _reset_analysis() -> void:
+	_analysis_data.clear()
+	_pv_list.clear()
+	_cur_pv = 0
+	_analysis_dirty = true
 
 
 ## 刷新分析面板（每指标一行；悬停行可查看含义；数值做万/亿缩写）。

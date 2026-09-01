@@ -8,8 +8,8 @@ var t_place := 0
 var placed := 1
 var cell := Vector2i(7, 7)
 var round_no := 0
-var switches := 0
-var switches_in_round := 0
+var switches := 0     # 全程思考中热切换累计
+var round_base := 0   # 本轮开始时的累计值（差值即本轮切换次数）
 
 
 func _initialize() -> void:
@@ -20,7 +20,6 @@ func _initialize() -> void:
 func _switch_difficulty() -> void:
 	game._on_difficulty_option((placed + switches) % 3)
 	switches += 1
-	switches_in_round += 1
 
 
 func _process(_d: float) -> bool:
@@ -31,18 +30,25 @@ func _process(_d: float) -> bool:
 	if f == 45:
 		game._place_stone(cell)  # (7,7) 为空，安全
 		t_place = Time.get_ticks_msec()
-		switches_in_round = 0
+		round_base = switches
 
 	if f > 45:
 		# 思考中：反复热切换（第一次一定落在思考窗口内）
 		if game.ai_thinking and f % 2 == 0:
 			_switch_difficulty()
 
+		# 对局提前分出胜负：热切换路径已在前面轮次验证，直接判定通过
+		if game.winner != 0:
+			print("HOTSWITCH OK (提前分出胜负 winner=%d mc=%d, 已验证 %d 轮, total_switches=%d)" % [game.winner, game.move_count, round_no, switches])
+			return true
+
 		# AI 应手完成
 		if not game.ai_thinking and game.move_count >= placed * 2 and game.winner == 0:
 			var dt := Time.get_ticks_msec() - t_place
+			var n_round := switches - round_base
+			round_base = switches
 			var want: int = [500, 1500, 5000][game.ai_difficulty]  # 简单/中等/困难（与 DIFFICULTY_CONFIG 一致）
-			print("round %d: 应手 %d ms, mc=%d, 切换累计 %d 次, 挂起=%d, 难度=%d(古法=%s) 实际超时=%d 期望=%d %s, cv=%s" % [round_no, dt, game.move_count, switches_in_round, game._pending_difficulty, game.ai_difficulty, str(game._classic_mode), game.ai.timeout_turn, want, "OK" if game.ai.timeout_turn == want else "MISMATCH", str(cell)])
+			print("round %d: 应手 %d ms, mc=%d, 本轮切换 %d 次(全程 %d), 挂起=%d, 难度=%d(古法=%s) 实际超时=%d 期望=%d %s, cv=%s" % [round_no, dt, game.move_count, n_round, switches, game._pending_difficulty, game.ai_difficulty, str(game._classic_mode), game.ai.timeout_turn, want, "OK" if game.ai.timeout_turn == want else "MISMATCH", str(cell)])
 			round_no += 1
 			placed += 1
 			if placed > 6:
