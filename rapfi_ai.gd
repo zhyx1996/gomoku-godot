@@ -609,11 +609,11 @@ func poll_output() -> void:
 			_send("INFO TIMEOUT_MATCH 9999000")
 			new_game()
 			# NNUE 预热：首搜需解压 40MB 权重（十余秒），用短搜提前触发。
-			# 预算给足 1s：除解压权重外，还要让引擎铺开 WASM worker 线程池——
-			# 10ms 短搜铺不开，线程池开销会落到对局第一手（实测首搜 nps 仅为稳态 1/3）。
+			# 300ms 足够解压权重；加长到 1s 实测无额外收益（线程池瓶颈不在预热时长，
+			# 而是游戏进程首次 think 的稀疏棋盘搜索与 FPS 帧速率共同决定）。
 			# 完成前 is_web_ready()=false（状态栏显示「引擎加载中」，think_async 自动等待）
 			_web_warming = true
-			_send("INFO timeout_turn 1000")
+			_send("INFO timeout_turn 300")
 			_send("BEGIN")
 		else:
 			return
