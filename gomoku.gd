@@ -109,6 +109,9 @@ var ai_white_button: Button
 # ---- 分析数据缓存（由引擎回调更新）----
 var _analysis_data := {}
 var _analysis_dirty := false            # 分析面板脏标记：每帧最多重建一次（INFO 风暴下不再拖垮主线程）
+var _snap_ver := -1                     # 网页端快照版本号（引擎输出聚合，增量应用）
+var _snap_lost_rev := -1                # 网页端实时「已排除点」版本号
+var _snap_forbid_rev := -1              # 网页端禁手点版本号
 var _engine_retries := 0                # 引擎重启计数：应手正常即清零，新局重置
 var _pending_difficulty := -1           # 思考中挂起的难度切换（AI 本手结束后生效；搜索中下发配置会让引擎丢弃搜索）
 var _move_history: Array = []  # 落子历史（用于悔棋）
@@ -1908,6 +1911,7 @@ func _new_game() -> void:
 	last_move = Vector2i(-1, -1)
 	winning_cells.clear()
 	ai_thinking = false
+	_restore_fps()
 	_threat_cells.clear()
 	_threat_type = ""
 	_threat_origin = Vector2i(-1, -1)
@@ -2124,6 +2128,7 @@ func _ai_turn() -> void:
 	if ai == null:
 		return
 	ai_thinking = true
+	_set_thinking_fps()
 	_update_status_text()
 	queue_redraw()
 
@@ -2137,6 +2142,7 @@ func _ai_turn() -> void:
 	# 原生/网页统一走异步：引擎在后台线程思考，主线程持续渲染与响应
 	var move: Vector2i = await ai.think_async(last_move)
 	ai_thinking = false
+	_restore_fps()
 
 	if not _in_game or gen != _turn_generation:
 		return  # 已返回标题或新局，丢弃陈旧结果
@@ -2172,6 +2178,7 @@ func _ai_turn() -> void:
 ## 古法编程 AI 应手（纯 GDScript 同步计算）。
 func _classic_turn() -> void:
 	ai_thinking = true
+	_set_thinking_fps()
 	_update_status_text()
 	queue_redraw()
 
@@ -2182,6 +2189,7 @@ func _classic_turn() -> void:
 	# 用 current_player 而非 ai_color：AI 执黑/执白/双 AI 时也能按实际行棋方计算
 	var move: Vector2i = _classic_ai.choose_move(board, current_player)
 	ai_thinking = false
+	_restore_fps()
 
 	if not _in_game or gen != _turn_generation:
 		return
@@ -2207,6 +2215,7 @@ func _ai_turn_first() -> void:
 	var gen := _turn_generation
 	if _classic_side(1):
 		ai_thinking = true
+		_set_thinking_fps()
 		_update_status_text()
 		queue_redraw()
 		await get_tree().process_frame
@@ -2214,6 +2223,7 @@ func _ai_turn_first() -> void:
 		@warning_ignore("integer_division")
 		var c := board_size / 2
 		ai_thinking = false
+		_restore_fps()
 		if not _in_game or gen != _turn_generation:
 			return
 		if _stop_pending:
@@ -2225,6 +2235,7 @@ func _ai_turn_first() -> void:
 	if ai == null:
 		return
 	ai_thinking = true
+	_set_thinking_fps()
 	_update_status_text()
 	queue_redraw()
 
@@ -2234,6 +2245,7 @@ func _ai_turn_first() -> void:
 	_reset_analysis()
 	var move: Vector2i = await ai.think_first_async()
 	ai_thinking = false
+	_restore_fps()
 
 	if not _in_game or gen != _turn_generation:
 		return
@@ -2358,6 +2370,10 @@ func _pv_entry(index: int) -> Dictionary:
 
 ## 引擎分析数据回调（由 rapfi_ai 的 analysis_callback 调用）。
 func _on_engine_analysis(data: Dictionary) -> void:
+	# 网页端聚合快照：JS 侧已解析引擎原始输出，每帧至多一条，整体应用
+	if data.has("snapshot"):
+		_apply_engine_snapshot(data["snapshot"])
+		return
 	# 实时候选点 / 禁手（单独处理，不进分析面板）
 	if data.has("realtime"):
 		if data["realtime"] == "BEST" and data.has("pos"):
@@ -2399,6 +2415,79 @@ func _reset_analysis() -> void:
 	_analysis_data.clear()
 	_pv_list.clear()
 	_cur_pv = 0
+	_snap_ver = -1  # 强制下一条快照全量应用
+	_analysis_dirty = true
+
+
+# ---- 网页端帧率节流 ----
+# Godot 主循环与 Rapfi 搜索调度抢占同一 JS 主线程（实测 60fps 全速渲染时引擎仅 13 万 nps，
+# 无负载时 68 万——5 倍差距；纯忙循环 10ms/16.7ms 更直接把搜索饿死锁住）。
+# 思考期间降帧到 20fps（红点脉冲/状态栏 20fps 足够），把主线程时间让给引擎。
+const THINK_FPS := 20
+
+func _set_thinking_fps() -> void:
+	if OS.has_feature("web"):
+		Engine.max_fps = THINK_FPS
+
+func _restore_fps() -> void:
+	if OS.has_feature("web"):
+		Engine.max_fps = 0  # 0=不限制，恢复默认
+
+
+## 应用网页端聚合快照（JS 侧已把引擎原始输出解析为结构化状态）。
+## 语义与逐行路径一致：NUMPV 切槽、每键双写当前槽 + 全局、REALTIME/禁手走版本号增量。
+func _apply_engine_snapshot(snap: Dictionary) -> void:
+	var ver := int(snap.get("ver", -1))
+	if ver == _snap_ver:
+		return  # 本帧无新引擎输出
+	_snap_ver = ver
+	var redraw := false
+	# 实时最佳点（JS 侧 BEST 覆盖语义与逐行路径一致）
+	if snap.has("best") and snap["best"] is Array and (snap["best"] as Array).size() >= 2:
+		var b: Array = snap["best"]
+		_realtime_best = Vector2i(int(b[0]), int(b[1]))
+		redraw = true
+	# 已排除点：版本号变了才整体替换（JS 侧跨搜索累计、落子/新局自动清）
+	var lost_rev := int(snap.get("lostRev", -1))
+	if lost_rev != _snap_lost_rev:
+		_snap_lost_rev = lost_rev
+		_realtime_lost.clear()
+		for c in snap.get("lost", []):
+			if c is Array and c.size() >= 2:
+				_realtime_lost.append(Vector2i(int(c[0]), int(c[1])))
+		redraw = true
+	# 禁手点
+	var forbid_rev := int(snap.get("forbidRev", -1))
+	if forbid_rev != _snap_forbid_rev:
+		_snap_forbid_rev = forbid_rev
+		_forbid_cells.clear()
+		for c in snap.get("forbid", []):
+			if c is Array and c.size() >= 2:
+				_forbid_cells.append(Vector2i(int(c[0]), int(c[1])))
+		redraw = true
+	# 分析指标 + PV 槽（与逐行路径相同的双写语义）
+	var g: Dictionary = snap.get("global", {})
+	for key in g:
+		_analysis_data[key] = g[key]
+	var pvs: Array = snap.get("pvs", [])
+	for i in pvs.size():
+		var pv: Dictionary = pvs[i]
+		if pv.is_empty():
+			continue
+		var entry := _pv_entry(i)
+		for key in pv:
+			entry[key] = pv[key]
+	# 估值历史（同一估值的上千条 INFO 只记一次）
+	if _analysis_data.has("eval"):
+		var e := str(_analysis_data["eval"])
+		if e.is_valid_int():
+			var v := e.to_int()
+			if _eval_history.is_empty() or int(_eval_history.back()) != v:
+				_eval_history.append(v)
+				if _eval_history.size() > 60:
+					_eval_history.pop_front()
+	if redraw:
+		queue_redraw()
 	_analysis_dirty = true
 
 

@@ -582,16 +582,28 @@ func _send(cmd: String) -> void:
 ## 从引擎批量读取输出（网页走 JS 队列一次取空，原生走管道单行）。
 func _poll_lines() -> PackedStringArray:
 	if IS_WEB:
-		var all := str(JavaScriptBridge.eval("window.RapfiBridge ? window.RapfiBridge.pollAll() : ''"))
-		if all == "":
-			return PackedStringArray()
-		return all.split("\n")
+		# 引擎输出由 JS 侧聚合（见 poll_output/_web_poll_frame），此处仅用于排空
+		_web_poll_frame()
+		return PackedStringArray()
 	if _stdio == null:
 		return PackedStringArray()
 	var line := _stdio.get_line()
 	if line == "":
 		return PackedStringArray()
 	return PackedStringArray([line])
+
+
+## 网页端单次跨界读取：JS 侧已把引擎原始输出聚合为 {moves, snap}，
+## 每帧只做一次小 JSON eval（原先逐行跨界在 show_detail=3 下每秒数千次，
+## 主循环越忙引擎被反向限速越狠——引擎 stdout 回调是同步阻塞的）。
+func _web_poll_frame() -> Dictionary:
+	if not IS_WEB:
+		return {}
+	var raw: Variant = JavaScriptBridge.eval("window.RapfiBridge ? window.RapfiBridge.pollFrame() : ''")
+	if raw == null or str(raw).is_empty():
+		return {}
+	var parsed: Variant = JSON.parse_string(str(raw))
+	return parsed if parsed is Dictionary else {}
 
 
 ## 网页端每帧轮询：引擎就绪后完成初始化；处理输出；收到走法时发信号。
@@ -617,8 +629,11 @@ func poll_output() -> void:
 			_send("BEGIN")
 		else:
 			return
-	for line in _poll_lines():
-		var handled: Variant = _handle_output_line(line)
+	var frame: Dictionary = _web_poll_frame()
+	for m in frame.get("moves", []):
+		if typeof(m) != TYPE_ARRAY or m.size() < 2:
+			continue
+		var handled: Variant = _handle_output_line("%d,%d" % [int(m[0]), int(m[1])])
 		if handled is Vector2i:
 			if _web_warming:
 				# 预热搜索出子：恢复配置并宣布就绪（该子无人监听，丢弃）
@@ -629,6 +644,8 @@ func poll_output() -> void:
 				web_ready.emit()
 				continue
 			move_ready.emit(handled)
+	if frame.has("snap"):
+		_dispatch_analysis({"snapshot": frame["snap"]})
 
 
 func _wait_msec(ms: int) -> void:
