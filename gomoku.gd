@@ -15,6 +15,7 @@ func _board_origin() -> Vector2:
 
 ## 窗口尺寸变化：侧栏跟随棋盘组的新位置。
 func _on_viewport_resized() -> void:
+	_origin_dirty = true  # 窗口尺寸变化，原点/格距缓存失效
 	if _side_panel != null and is_instance_valid(_side_panel):
 		_side_panel.position = Vector2(_board_origin().x + 656.0 + 12.0, SIDE_PANEL_POSITION.y)
 const STONE_RADIUS := 16.0
@@ -215,6 +216,20 @@ var _win_buttons: HBoxContainer = null # 胜利后按钮行（再来一局 + 返
 var _place_player: AudioStreamPlayer = null  # 落子音效
 var _win_player: AudioStreamPlayer = null    # 胜利音效
 
+# 性能缓存
+var _cached_step_index := {}    # 落子序号映射缓存（_draw_stones 避免每帧重建）
+var _step_index_dirty := true   # 落子序号缓存脏标记
+var _cached_board_origin := Vector2.ZERO  # _board_origin() 缓存
+var _cached_cell_size := 0.0              # _cell_size() 缓存
+var _cached_board_span := 0.0             # _board_span() 缓存
+var _origin_dirty := true                 # 原点/格距缓存脏标记
+var _bg_gradient_cache: Array = []        # 背景渐变颜色缓存（32 段）
+var _bg_gradient_rects: Array = []        # 背景渐变矩形缓存
+var _bg_gradient_size := Vector2.ZERO     # 渐变缓存对应的视口尺寸
+var _threat_cache_paths: Array = []        # 威胁棋型折线路径缓存
+var _threat_cache_cums: Array = []         # 威胁棋型弧长表缓存
+var _threat_cache_dirty := true            # 威胁缓存脏标记
+
 # 四方向
 const _DIRS := [
 	Vector2i(1, 0),
@@ -267,8 +282,9 @@ func _process(delta: float) -> void:
 			col = cols[0].lerp(cols[1], k)
 		_title_glow_label.add_theme_color_override("font_color", col)
 	if not _in_game:
-		# 标题界面：只重绘背景粒子
-		queue_redraw()
+		# 标题界面：仅在有背景粒子或流光动画时重绘（静态时跳过）
+		if not _reduced_fx or _ui_style == 1:
+			queue_redraw()
 		return
 	_update_hover()
 	# 网页端：每帧泵取引擎输出（走法通过 move_ready 信号返回）
@@ -1819,6 +1835,7 @@ func _on_undo_pressed() -> void:
 	_attack_cells.clear()
 	_attack_type = ""
 	_attack_time = -1.0
+	_step_index_dirty = true  # 落子序号缓存失效
 	# 悔棋后同步推理引擎棋盘，避免引擎仍按旧局面应子（古法编程读的是当前 board，无需同步）
 	if ai != null:
 		ai.sync_board(board, ai_color)
@@ -1924,6 +1941,7 @@ func _new_game() -> void:
 	_engine_retries = 0
 	_pending_difficulty = -1
 	_move_history.clear()
+	_step_index_dirty = true  # 落子序号缓存失效
 	_analysis_data.clear()
 	_eval_history.clear()
 	_realtime_best = Vector2i(-1, -1)
@@ -2087,6 +2105,7 @@ func _place_stone(cell: Vector2i) -> void:
 	last_move = cell
 	move_count += 1
 	_move_history.append(cell)
+	_step_index_dirty = true  # 落子序号缓存失效
 	_last_place_time = _fx_time  # 触发落子弹入动画
 	_realtime_best = Vector2i(-1, -1)
 	_realtime_lost.clear()
@@ -2557,6 +2576,7 @@ func _detect_threat_fx(cell: Vector2i) -> void:
 	var r := _compute_threat(cell)
 	_threat_type = r["threat_type"]
 	_threat_cells = r["threat_cells"]
+	_threat_cache_dirty = true  # 威胁棋型变化，弧长表缓存失效
 	_attack_type = r["attack_type"]
 	_attack_cells = r["attack_cells"]
 	_threat_origin = cell  # 流光折线的分组锚点
@@ -3069,25 +3089,41 @@ func _make_win_sound() -> AudioStreamWAV:
 # 坐标换算
 # ============================================================
 func _screen_to_cell(mouse_position: Vector2) -> Vector2i:
-	var cs := _cell_size()
-	var min_point := _board_origin() - Vector2.ONE * (cs * 0.5)
-	var max_point := _board_origin() + Vector2.ONE * _board_span() + Vector2.ONE * (cs * 0.5)
+	if _origin_dirty:
+		_refresh_origin_cache()
+	var cs := _cached_cell_size
+	var min_point := _cached_board_origin - Vector2.ONE * (cs * 0.5)
+	var max_point := _cached_board_origin + Vector2.ONE * _cached_board_span + Vector2.ONE * (cs * 0.5)
 	if mouse_position.x < min_point.x or mouse_position.y < min_point.y:
 		return Vector2i(-1, -1)
 	if mouse_position.x > max_point.x or mouse_position.y > max_point.y:
 		return Vector2i(-1, -1)
 
-	var scaled := (mouse_position - _board_origin()) / cs
+	var scaled := (mouse_position - _cached_board_origin) / cs
 	var cell := Vector2i(roundi(scaled.x), roundi(scaled.y))
 	if not _is_inside_board(cell):
 		return Vector2i(-1, -1)
-	if mouse_position.distance_to(_cell_to_screen(cell)) > cs * 0.45:
+	# 用平方距离替代 distance_to（避免开平方）
+	var center := _cell_to_screen(cell)
+	var dx := mouse_position.x - center.x
+	var dy := mouse_position.y - center.y
+	var threshold := cs * 0.45
+	if dx * dx + dy * dy > threshold * threshold:
 		return Vector2i(-1, -1)
 	return cell
 
 
 func _cell_to_screen(cell: Vector2i) -> Vector2:
-	return _board_origin() + Vector2(cell.x, cell.y) * _cell_size()
+	if _origin_dirty:
+		_refresh_origin_cache()
+	return _cached_board_origin + Vector2(cell.x, cell.y) * _cached_cell_size
+
+
+func _refresh_origin_cache() -> void:
+	_cached_board_origin = _board_origin()
+	_cached_cell_size = _cell_size()
+	_cached_board_span = _cached_cell_size * float(board_size - 1)
+	_origin_dirty = false
 
 
 func _is_inside_board(cell: Vector2i) -> bool:
@@ -3130,14 +3166,22 @@ func _draw() -> void:
 
 func _draw_background() -> void:
 	var size := get_viewport_rect().size
-	# 垂直渐变背景（分 32 段插值）
-	var segments := 32
-	for i in range(segments):
-		var t := float(i) / float(segments - 1)
-		var color := _cur_bg_top.lerp(_cur_bg_bottom, t)
-		var y0 := size.y * float(i) / float(segments)
-		var y1 := size.y * float(i + 1) / float(segments)
-		draw_rect(Rect2(0, y0, size.x, y1 - y0 + 1), color)
+	# 垂直渐变背景（缓存 32 段颜色，避免每帧插值计算）
+	if _bg_gradient_cache.is_empty() or _bg_gradient_size != size:
+		_bg_gradient_cache.clear()
+		_bg_gradient_size = size
+		var segments := 32
+		for i in range(segments):
+			var t := float(i) / float(segments - 1)
+			_bg_gradient_cache.append(_cur_bg_top.lerp(_cur_bg_bottom, t))
+		# 预计算每段矩形
+		_bg_gradient_rects.clear()
+		for i in range(segments):
+			var y0 := size.y * float(i) / float(segments)
+			var y1 := size.y * float(i + 1) / float(segments)
+			_bg_gradient_rects.append(Rect2(0, y0, size.x, y1 - y0 + 1))
+	for i in range(_bg_gradient_cache.size()):
+		draw_rect(_bg_gradient_rects[i], _bg_gradient_cache[i])
 	# 漂浮光点（减弱动效时不绘制）
 	if not _reduced_fx:
 		for p in _bg_particles:
@@ -3303,13 +3347,15 @@ func _draw_stones() -> void:
 	if board.size() != board_size:
 		return
 
-	# 先用 _move_history 建立「落子序号」映射（第几步落子）
-	var step_index := {}
-	var step := 1
-	for c in _move_history:
-		if c is Vector2i:
-			step_index[c] = step
-			step += 1
+	# 缓存「落子序号」映射，避免每帧 O(n²) 重建
+	if _step_index_dirty or _cached_step_index.size() != _move_history.size():
+		_cached_step_index.clear()
+		var step := 1
+		for c in _move_history:
+			if c is Vector2i:
+				_cached_step_index[c] = step
+				step += 1
+		_step_index_dirty = false
 
 	# 最近落子的弹入动画比例（0.35s 内从 0.4 弹到 1.0）
 	var place_scale := 1.0
@@ -3347,8 +3393,8 @@ func _draw_stones() -> void:
 				draw_circle(center + Vector2(-4, -5) * sc, r * 0.14, Color("ffffff", 0.30))
 				draw_circle(center + Vector2(-3, -4) * sc, r * 0.07, Color(WHITE_GLOSS, 0.55))
 				# 落子序号
-				if _show_index and step_index.has(Vector2i(x, y)):
-					draw_string(UI_FONT, center + Vector2(-3, 6), str(step_index[Vector2i(x, y)]), HORIZONTAL_ALIGNMENT_CENTER, -1, 12, Color("ffffff"))
+				if _show_index and _cached_step_index.has(Vector2i(x, y)):
+					draw_string(UI_FONT, center + Vector2(-3, 6), str(_cached_step_index[Vector2i(x, y)]), HORIZONTAL_ALIGNMENT_CENTER, -1, 12, Color("ffffff"))
 			else:
 				# 白棋：宣纸白（亮顶 → 暖暗底）+ 顶部高光 + 暖轮廓
 				draw_circle(center, r, _cur_white)
@@ -3356,8 +3402,8 @@ func _draw_stones() -> void:
 				draw_circle(center + Vector2(2, 3) * sc, r * 0.78, Color("b8c4d8", 0.5))
 				draw_arc(center, r - 1, 0.0, TAU, 48, Color("8fa3c0", 0.5), 1.2, true)
 				draw_circle(center + Vector2(-4, -5) * sc, r * 0.30, Color(WHITE_GLOSS, 0.85))
-				if _show_index and step_index.has(Vector2i(x, y)):
-					draw_string(UI_FONT, center + Vector2(-3, 6), str(step_index[Vector2i(x, y)]), HORIZONTAL_ALIGNMENT_CENTER, -1, 12, Color("1f2937"))
+				if _show_index and _cached_step_index.has(Vector2i(x, y)):
+					draw_string(UI_FONT, center + Vector2(-3, 6), str(_cached_step_index[Vector2i(x, y)]), HORIZONTAL_ALIGNMENT_CENTER, -1, 12, Color("1f2937"))
 
 
 ## 绘制悬停幽灵棋子预览（半透明 + 青色描边）。
@@ -3603,16 +3649,23 @@ func _draw_threat_highlight() -> void:
 		"double_three":
 			color = Color("fb923c")  # 橙
 
-	var paths := _threat_paths(_threat_cells)
-	if paths.is_empty():
+	# 缓存折线路径与弧长表，避免每帧重建
+	if _threat_cache_dirty:
+		_threat_cache_paths = _threat_paths(_threat_cells)
+		_threat_cache_cums.clear()
+		for path in _threat_cache_paths:
+			_threat_cache_cums.append(_build_arc_length_table(path))
+		_threat_cache_dirty = false
+
+	if _threat_cache_paths.is_empty():
 		# 无法连成折线（兜底）：退化为柔和呼吸光晕
 		var breath := 0.5 + 0.5 * sin(_fx_time * 2.2)
 		for c in _threat_cells:
 			draw_circle(_cell_to_screen(c), _stone_radius() + 3.0 + breath * 3.0, Color(color, 0.12 + 0.12 * breath))
 		return
-	for i in range(paths.size()):
+	for i in range(_threat_cache_paths.size()):
 		var phase := _fx_time * 0.55 + float(i) * 0.5
-		_draw_flow_line(paths[i], color, phase, _stone_radius())
+		_draw_flow_line_cached(_threat_cache_paths[i], _threat_cache_cums[i], color, phase, _stone_radius())
 	# 充能环：每颗棋子外围旋转的双段弧 + 柔和呼吸，表现「正在蓄力」
 	for c in _threat_cells:
 		var center := _cell_to_screen(c)
@@ -3662,18 +3715,17 @@ func _threat_paths(cells: Array) -> Array:
 	return paths
 
 
-## 沿折线绘制流光：贯穿整线的呼吸底光 + 彗星拖尾光带 + 头部亮斑 + 端点辉光。
-## phase 单位为「圈」（自动循环）；折线两端向外延长，让光带看起来贯穿棋型。
-func _draw_flow_line(pts: Array, color: Color, phase: float, base_r: float) -> void:
+## 构建折线的弧长表（缓存用，几何不变时只算一次）。
+func _build_arc_length_table(pts: Array) -> Dictionary:
 	if pts.size() < 2:
-		return
+		return { poly = PackedVector2Array(), cum = PackedFloat32Array(), total = 0.0 }
+	var base_r := _stone_radius()
 	var a: Vector2 = pts[0] + (pts[0] - pts[1]).normalized() * base_r * 0.8
 	var b: Vector2 = pts[pts.size() - 1] + (pts[pts.size() - 1] - pts[pts.size() - 2]).normalized() * base_r * 0.8
 	var poly := PackedVector2Array([a])
 	for p in pts:
 		poly.append(p)
 	poly.append(b)
-	# 弧长表（把折线参数化为 0~1）
 	var cum := PackedFloat32Array()
 	cum.resize(poly.size())
 	cum[0] = 0.0
@@ -3681,8 +3733,17 @@ func _draw_flow_line(pts: Array, color: Color, phase: float, base_r: float) -> v
 	for i in range(1, poly.size()):
 		total += poly[i - 1].distance_to(poly[i])
 		cum[i] = total
-	if total <= 0.0:
+	return { poly = poly, cum = cum, total = total }
+
+
+## 沿折线绘制流光（缓存版）：使用预计算的弧长表，避免每帧重建。
+## phase 单位为「圈」（自动循环）；折线两端向外延长，让光带看起来贯穿棋型。
+func _draw_flow_line_cached(pts: Array, arc: Dictionary, color: Color, phase: float, base_r: float) -> void:
+	if pts.size() < 2 or arc["total"] <= 0.0:
 		return
+	var poly: PackedVector2Array = arc["poly"]
+	var cum: PackedFloat32Array = arc["cum"]
+	var total: float = arc["total"]
 	# 1) 呼吸底光：宽而淡的顺滑衬底
 	var breath := 0.5 + 0.5 * sin(_fx_time * 2.2)
 	draw_polyline(poly, Color(color, 0.10 + 0.08 * breath), base_r * 1.55)
@@ -3703,6 +3764,12 @@ func _draw_flow_line(pts: Array, color: Color, phase: float, base_r: float) -> v
 	draw_circle(head_pos, base_r * 0.34, Color(color.lerp(Color.WHITE, 0.55), 0.9))
 	draw_circle(poly[0], base_r * 0.30, Color(color, 0.5))
 	draw_circle(poly[poly.size() - 1], base_r * 0.30, Color(color, 0.5))
+
+
+## 沿折线绘制流光（原版，保留兼容）：贯穿整线的呼吸底光 + 彗星拖尾光带 + 头部亮斑 + 端点辉光。
+func _draw_flow_line(pts: Array, color: Color, phase: float, base_r: float) -> void:
+	var arc := _build_arc_length_table(pts)
+	_draw_flow_line_cached(pts, arc, color, phase, base_r)
 
 
 ## 按弧长比例取折线上的一点（u ∈ 0~1）。
