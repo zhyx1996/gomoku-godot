@@ -152,6 +152,17 @@ var _turn_generation := 0                 # 对局代数（新局/返回标题�
 var _mode_confirm: ConfirmationDialog = null  # 对局中切换模式的放弃确认框
 var _reduced_fx := false                 # 减弱动效（无障碍）：关闭背景粒子与胜利彩带
 var fx_button: Button = null             # 「动效」开关按钮
+# ---- 特效设置 UI 控件 ----
+var _fx_intensity_slider: HSlider = null  # 特效强度滑块
+var _fx_intensity_value: Label = null     # 特效强度数值显示
+var _fx_speed_slider: HSlider = null      # 动画速度滑块
+var _fx_speed_value: Label = null         # 动画速度数值显示
+var _threat_style_button: Button = null   # 棋型高亮样式按钮
+var _win_anim_button: Button = null       # 获胜动画样式按钮
+var _fx_particles_button: Button = null   # 粒子开关
+var _fx_glow_button: Button = null        # 光晕开关
+var _fx_threat_button: Button = null      # 威胁高亮开关
+var _fx_win_effect_button: Button = null  # 获胜特效开关
 var _settings_scroll: ScrollContainer = null  # 设置弹窗滚动容器（视口自适应）
 var _status_base := ""                   # 状态栏基础文案（思考中省略号动画基于它拼接）
 var _status_pill: PanelContainer = null  # 对局状态胶囊（godot-ui：信息即时可读）
@@ -175,6 +186,16 @@ var _win_emblem: Control = null          # 获胜徽章（获胜方棋子，每�
 var _win_sub: Label = null               # 胜利卡片副文字（共 N 手）
 var _side_panel: PanelContainer = null   # 对局侧栏（窗口尺寸变化时重新定位）
 const WIN_SHAKE_DUR := 0.32              # 震屏时长
+
+# ---- 特效配置（现代炫酷 GUI 设置项）----
+var _fx_intensity := 1.0          # 特效强度 0.5~2.0（粒子数量/光效强度倍率）
+var _fx_speed := 1.0              # 动画速度 0.5~2.0（动画播放速率倍率）
+var _threat_style := 0            # 棋型高亮样式 0=流光 1=脉冲 2=星轨
+var _win_anim_style := 0          # 获胜动画样式 0=经典 1=粒子爆发 2=光环扩散
+var _fx_particles_enabled := true # 背景粒子开关
+var _fx_glow_enabled := true      # 棋子光晕开关
+var _fx_threat_enabled := true    # 威胁高亮开关
+var _fx_win_effect_enabled := true # 获胜特效开关
 
 # ---- 分析状态（引擎回调更新）----
 var _realtime_best := Vector2i(-1, -1)  # 思考中引擎当前最佳候选点
@@ -299,16 +320,19 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 
-## 生成背景漂浮光点（缓慢上升的微光）。
+## 生成背景漂浮光点（缓慢上升的微光）。粒子数量随特效强度缩放。
 func _spawn_bg_particles() -> void:
 	_bg_particles.clear()
+	if not _fx_particles_enabled:
+		return
 	var size := get_viewport_rect().size
-	for i in range(40):
+	var count := int(40.0 * _fx_intensity)  # 特效强度控制粒子数量
+	for i in range(count):
 		_bg_particles.append({
 			"pos": Vector2(randf_range(0, size.x), randf_range(0, size.y)),
-			"vel": Vector2(randf_range(-6.0, 6.0), randf_range(-14.0, -4.0)),
-			"radius": randf_range(1.0, 2.4),
-			"alpha": randf_range(0.05, 0.12),
+			"vel": Vector2(randf_range(-6.0, 6.0), randf_range(-14.0, -4.0)) * _fx_speed,
+			"radius": randf_range(1.0, 2.4) * _fx_intensity,
+			"alpha": randf_range(0.05, 0.12) * _fx_intensity,
 			"phase": randf_range(0.0, TAU),
 		})
 
@@ -373,23 +397,24 @@ func _update_win_sparks(delta: float) -> void:
 	_win_sparks = kept
 
 
-## 生成胜利彩带。
+## 生成胜利彩带。粒子数量随特效强度缩放。
 func _spawn_confetti() -> void:
-	if _reduced_fx:
+	if _reduced_fx or not _fx_particles_enabled:
 		return
 	_confetti.clear()
 	var size := get_viewport_rect().size
 	var colors := [ACCENT_GOLD, ACCENT_GOLD, Color("fde68a"), ACCENT_CYAN, ACCENT_MAGENTA, ACCENT_GREEN, Color("f87171")]
-	for i in range(150):
+	var count := int(150 * _fx_intensity)  # 特效强度控制彩带数量
+	for i in range(count):
 		var kind := 0 if i % 5 < 4 else 1  # 8 成缎带 / 2 成火花拖尾
 		_confetti.append({
 			"kind": kind,
 			"pos": Vector2(randf_range(0, size.x), randf_range(-size.y * 0.25, -10.0)),
-			"vel": Vector2(randf_range(-36.0, 36.0), randf_range(40.0, 110.0)) if kind == 0 else Vector2(randf_range(-20.0, 20.0), randf_range(120.0, 240.0)),
+			"vel": Vector2(randf_range(-36.0, 36.0), randf_range(40.0, 110.0)) * _fx_speed if kind == 0 else Vector2(randf_range(-20.0, 20.0), randf_range(120.0, 240.0)) * _fx_speed,
 			"gravity": randf_range(140.0, 220.0) if kind == 0 else randf_range(40.0, 90.0),
 			"rot": randf_range(0.0, TAU),
-			"spin": randf_range(-8.0, 8.0),
-			"size": randf_range(3.5, 8.5) if kind == 0 else randf_range(5.0, 11.0),
+			"spin": randf_range(-8.0, 8.0) * _fx_speed,
+			"size": (randf_range(3.5, 8.5) if kind == 0 else randf_range(5.0, 11.0)) * _fx_intensity,
 			"color": colors[i % colors.size()],
 		})
 
@@ -1282,6 +1307,85 @@ func _build_settings_popup() -> void:
 	theme_button.pressed.connect(_on_theme_pressed)
 	layout.add_child(theme_button)
 
+	# ── 特效设置（现代炫酷 GUI 配置项）──
+	layout.add_child(_section_label("✨ 特效设置"))
+
+	# 特效强度滑块
+	var intensity_row := HBoxContainer.new()
+	intensity_row.add_theme_constant_override("separation", 8)
+	var intensity_label := Label.new()
+	intensity_label.text = "特效强度"
+	intensity_label.custom_minimum_size = Vector2(70, 0)
+	intensity_label.add_theme_font_size_override("font_size", 12)
+	intensity_row.add_child(intensity_label)
+	_fx_intensity_slider = HSlider.new()
+	_fx_intensity_slider.min_value = 0.5
+	_fx_intensity_slider.max_value = 2.0
+	_fx_intensity_slider.step = 0.1
+	_fx_intensity_slider.value = _fx_intensity
+	_fx_intensity_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fx_intensity_slider.value_changed.connect(_on_fx_intensity_changed)
+	intensity_row.add_child(_fx_intensity_slider)
+	_fx_intensity_value = Label.new()
+	_fx_intensity_value.text = "%.1f" % _fx_intensity
+	_fx_intensity_value.custom_minimum_size = Vector2(30, 0)
+	_fx_intensity_value.add_theme_font_size_override("font_size", 12)
+	intensity_row.add_child(_fx_intensity_value)
+	layout.add_child(intensity_row)
+
+	# 动画速度滑块
+	var speed_row := HBoxContainer.new()
+	speed_row.add_theme_constant_override("separation", 8)
+	var speed_label := Label.new()
+	speed_label.text = "动画速度"
+	speed_label.custom_minimum_size = Vector2(70, 0)
+	speed_label.add_theme_font_size_override("font_size", 12)
+	speed_row.add_child(speed_label)
+	_fx_speed_slider = HSlider.new()
+	_fx_speed_slider.min_value = 0.5
+	_fx_speed_slider.max_value = 2.0
+	_fx_speed_slider.step = 0.1
+	_fx_speed_slider.value = _fx_speed
+	_fx_speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fx_speed_slider.value_changed.connect(_on_fx_speed_changed)
+	speed_row.add_child(_fx_speed_slider)
+	_fx_speed_value = Label.new()
+	_fx_speed_value.text = "%.1f" % _fx_speed
+	_fx_speed_value.custom_minimum_size = Vector2(30, 0)
+	_fx_speed_value.add_theme_font_size_override("font_size", 12)
+	speed_row.add_child(_fx_speed_value)
+	layout.add_child(speed_row)
+
+	# 棋型高亮样式
+	_threat_style_button = _make_button()
+	_threat_style_button.pressed.connect(_on_threat_style_pressed)
+	layout.add_child(_threat_style_button)
+
+	# 获胜动画样式
+	_win_anim_button = _make_button()
+	_win_anim_button.pressed.connect(_on_win_anim_style_pressed)
+	layout.add_child(_win_anim_button)
+
+	# 特效开关组
+	layout.add_child(_section_label("特效开关"))
+	var fx_grid := GridContainer.new()
+	fx_grid.columns = 2
+	fx_grid.add_theme_constant_override("h_separation", 6)
+	fx_grid.add_theme_constant_override("v_separation", 6)
+	layout.add_child(fx_grid)
+	_fx_particles_button = _make_button()
+	_fx_particles_button.pressed.connect(_on_fx_particles_pressed)
+	fx_grid.add_child(_fx_particles_button)
+	_fx_glow_button = _make_button()
+	_fx_glow_button.pressed.connect(_on_fx_glow_pressed)
+	fx_grid.add_child(_fx_glow_button)
+	_fx_threat_button = _make_button()
+	_fx_threat_button.pressed.connect(_on_fx_threat_pressed)
+	fx_grid.add_child(_fx_threat_button)
+	_fx_win_effect_button = _make_button()
+	_fx_win_effect_button.pressed.connect(_on_fx_win_effect_pressed)
+	fx_grid.add_child(_fx_win_effect_button)
+
 	# 返回标题
 	var return_btn := _make_button()
 	return_btn.text = "返回标题"
@@ -1500,6 +1604,23 @@ func _refresh_buttons() -> void:
 		_ai_section_label.visible = show_ai_side
 	if _ai_section_row:
 		_ai_section_row.visible = show_ai_side
+	# 特效设置按钮
+	if _threat_style_button:
+		_threat_style_button.text = "棋型高亮：%s" % _threat_style_name()
+	if _win_anim_button:
+		_win_anim_button.text = "获胜动画：%s" % _win_anim_style_name()
+	if _fx_particles_button:
+		_fx_particles_button.text = "粒子：%s" % ("开" if _fx_particles_enabled else "关")
+		_style_toggle_state(_fx_particles_button, _fx_particles_enabled)
+	if _fx_glow_button:
+		_fx_glow_button.text = "光晕：%s" % ("开" if _fx_glow_enabled else "关")
+		_style_toggle_state(_fx_glow_button, _fx_glow_enabled)
+	if _fx_threat_button:
+		_fx_threat_button.text = "威胁高亮：%s" % ("开" if _fx_threat_enabled else "关")
+		_style_toggle_state(_fx_threat_button, _fx_threat_enabled)
+	if _fx_win_effect_button:
+		_fx_win_effect_button.text = "获胜特效：%s" % ("开" if _fx_win_effect_enabled else "关")
+		_style_toggle_state(_fx_win_effect_button, _fx_win_effect_enabled)
 
 
 func _on_mode_pressed() -> void:
@@ -1696,6 +1817,15 @@ func _load_settings() -> void:
 	_show_index = bool(cf.get_value("display", "index", false))
 	_show_winline = bool(cf.get_value("display", "winline", true))
 	_show_eval = bool(cf.get_value("display", "eval", false))
+	# 特效配置
+	_fx_intensity = clampf(float(cf.get_value("fx", "intensity", 1.0)), 0.5, 2.0)
+	_fx_speed = clampf(float(cf.get_value("fx", "speed", 1.0)), 0.5, 2.0)
+	_threat_style = clampi(int(cf.get_value("fx", "threat_style", 0)), 0, 2)
+	_win_anim_style = clampi(int(cf.get_value("fx", "win_anim_style", 0)), 0, 2)
+	_fx_particles_enabled = bool(cf.get_value("fx", "particles", true))
+	_fx_glow_enabled = bool(cf.get_value("fx", "glow", true))
+	_fx_threat_enabled = bool(cf.get_value("fx", "threat", true))
+	_fx_win_effect_enabled = bool(cf.get_value("fx", "win_effect", true))
 	_apply_theme()
 
 
@@ -1712,6 +1842,15 @@ func _save_settings() -> void:
 	cf.set_value("display", "index", _show_index)
 	cf.set_value("display", "winline", _show_winline)
 	cf.set_value("display", "eval", _show_eval)
+	# 特效配置
+	cf.set_value("fx", "intensity", _fx_intensity)
+	cf.set_value("fx", "speed", _fx_speed)
+	cf.set_value("fx", "threat_style", _threat_style)
+	cf.set_value("fx", "win_anim_style", _win_anim_style)
+	cf.set_value("fx", "particles", _fx_particles_enabled)
+	cf.set_value("fx", "glow", _fx_glow_enabled)
+	cf.set_value("fx", "threat", _fx_threat_enabled)
+	cf.set_value("fx", "win_effect", _fx_win_effect_enabled)
 	cf.save(SETTINGS_PATH)
 
 
@@ -2369,6 +2508,92 @@ func _on_fx_pressed() -> void:
 	_save_settings()
 
 
+# ============================================================
+# 特效设置回调
+# ============================================================
+
+## 特效强度滑块变化
+func _on_fx_intensity_changed(value: float) -> void:
+	_fx_intensity = value
+	if _fx_intensity_value:
+		_fx_intensity_value.text = "%.1f" % value
+	_spawn_bg_particles()  # 重建背景粒子
+	queue_redraw()
+	_save_settings()
+
+
+## 动画速度滑块变化
+func _on_fx_speed_changed(value: float) -> void:
+	_fx_speed = value
+	if _fx_speed_value:
+		_fx_speed_value.text = "%.1f" % value
+	queue_redraw()
+	_save_settings()
+
+
+## 棋型高亮样式切换
+func _on_threat_style_pressed() -> void:
+	_threat_style = (_threat_style + 1) % 3
+	_threat_cache_dirty = true  # 样式切换需要重建缓存
+	_refresh_buttons()
+	queue_redraw()
+	_save_settings()
+
+
+## 获胜动画样式切换
+func _on_win_anim_style_pressed() -> void:
+	_win_anim_style = (_win_anim_style + 1) % 3
+	_refresh_buttons()
+	_save_settings()
+
+
+## 背景粒子开关
+func _on_fx_particles_pressed() -> void:
+	_fx_particles_enabled = not _fx_particles_enabled
+	if not _fx_particles_enabled:
+		_bg_particles.clear()
+		_confetti.clear()
+		_win_sparks.clear()
+	else:
+		_spawn_bg_particles()
+	_refresh_buttons()
+	queue_redraw()
+	_save_settings()
+
+
+## 棋子光晕开关
+func _on_fx_glow_pressed() -> void:
+	_fx_glow_enabled = not _fx_glow_enabled
+	_refresh_buttons()
+	queue_redraw()
+	_save_settings()
+
+
+## 威胁高亮开关
+func _on_fx_threat_pressed() -> void:
+	_fx_threat_enabled = not _fx_threat_enabled
+	_refresh_buttons()
+	queue_redraw()
+	_save_settings()
+
+
+## 获胜特效开关
+func _on_fx_win_effect_pressed() -> void:
+	_fx_win_effect_enabled = not _fx_win_effect_enabled
+	_refresh_buttons()
+	_save_settings()
+
+
+## 获取棋型高亮样式名称
+func _threat_style_name() -> String:
+	return ["流光", "脉冲", "星轨"][_threat_style]
+
+
+## 获取获胜动画样式名称
+func _win_anim_style_name() -> String:
+	return ["经典", "粒子爆发", "光环扩散"][_win_anim_style]
+
+
 func _player_name(player: int) -> String:
 	return "黑棋" if player == 1 else "白棋"
 
@@ -2776,6 +3001,13 @@ func _has_five_in_a_row(origin: Vector2i, player: int) -> bool:
 # 特效
 # ============================================================
 func _trigger_win_fx() -> void:
+	if not _fx_win_effect_enabled:
+		# 简化版：只显示胜利横幅
+		_win_anim = 0.0
+		await get_tree().create_timer(0.3).timeout
+		if winner != 0 and _in_game:
+			_show_win_banner()
+		return
 	_win_anim = 0.0
 	_win_flash = _fx_time
 	_shake_start = _fx_time
@@ -2784,28 +3016,30 @@ func _trigger_win_fx() -> void:
 	if _win_player:
 		_win_player.play()
 	# 演出分两幕：光束/射线/火花先播 ~0.55s，横幅随后入场（不遮挡高光段）
-	await get_tree().create_timer(0.55).timeout
+	var delay := 0.55 / _fx_speed  # 动画速度影响演出节奏
+	await get_tree().create_timer(delay).timeout
 	if winner != 0 and _in_game:
 		_show_win_banner()
 
 
-## 获胜火花：从每颗连珠棋子向外迸发的拖尾光点。
+## 获胜火花：从每颗连珠棋子向外迸发的拖尾光点。粒子数量随特效强度缩放。
 func _spawn_win_sparks() -> void:
 	_win_sparks.clear()
-	if _reduced_fx:
+	if _reduced_fx or not _fx_particles_enabled:
 		return
 	var colors := [ACCENT_GOLD, Color("fff3c4"), ACCENT_CYAN, Color("ffb86b")]
+	var spark_count := int(16 * _fx_intensity)  # 特效强度控制火花数量
 	for c in winning_cells:
 		var center := _cell_to_screen(c)
-		for i in range(16):
+		for i in range(spark_count):
 			var ang := randf_range(0.0, TAU)
-			var speed := randf_range(70.0, 260.0)
+			var speed := randf_range(70.0, 260.0) * _fx_speed
 			_win_sparks.append({
 				"pos": center + Vector2(randf_range(-8, 8), randf_range(-8, 8)),
 				"vel": Vector2(cos(ang), sin(ang) * 0.75) * speed,
-				"life": randf_range(0.55, 1.15),
+				"life": randf_range(0.55, 1.15) / _fx_speed,
 				"age": 0.0,
-				"width": randf_range(1.4, 2.6),
+				"width": randf_range(1.4, 2.6) * _fx_intensity,
 				"color": colors[i % colors.size()],
 			})
 
@@ -3632,10 +3866,9 @@ func _draw_realtime() -> void:
 		draw_circle(_cell_to_screen(c), 3.0, Color("f87171", 0.45))
 
 
-## 制胜棋型高亮：流光沿棋型折线循环流动。
-## 顺滑呼吸底光 + 亮核心线 + 彗星拖尾光带；四三/双三两条线各自错相位流动。
+## 制胜棋型高亮：多种样式可选（流光/脉冲/星轨），支持特效强度与速度配置。
 func _draw_threat_highlight() -> void:
-	if _threat_cells.is_empty():
+	if _threat_cells.is_empty() or not _fx_threat_enabled:
 		return
 
 	var color := Color("f87171")  # 亮红，最威胁
@@ -3649,6 +3882,10 @@ func _draw_threat_highlight() -> void:
 		"double_three":
 			color = Color("fb923c")  # 橙
 
+	# 应用特效强度
+	var intensity := _fx_intensity
+	var speed := _fx_speed
+
 	# 缓存折线路径与弧长表，避免每帧重建
 	if _threat_cache_dirty:
 		_threat_cache_paths = _threat_paths(_threat_cells)
@@ -3659,32 +3896,100 @@ func _draw_threat_highlight() -> void:
 
 	if _threat_cache_paths.is_empty():
 		# 无法连成折线（兜底）：退化为柔和呼吸光晕
-		var breath := 0.5 + 0.5 * sin(_fx_time * 2.2)
+		var breath := 0.5 + 0.5 * sin(_fx_time * 2.2 * speed)
 		for c in _threat_cells:
-			draw_circle(_cell_to_screen(c), _stone_radius() + 3.0 + breath * 3.0, Color(color, 0.12 + 0.12 * breath))
+			draw_circle(_cell_to_screen(c), (_stone_radius() + 3.0 + breath * 3.0) * intensity, Color(color, (0.12 + 0.12 * breath) * intensity))
 		return
+
+	# 根据样式绘制不同效果
+	match _threat_style:
+		0:  # 流光（默认）：折线流动 + 充能环 + 星屑
+			_draw_threat_flow_style(color, intensity, speed)
+		1:  # 脉冲：扩散光环 + 粒子爆发
+			_draw_threat_pulse_style(color, intensity, speed)
+		2:  # 星轨：旋转星轨 + 连线 + 光点
+			_draw_threat_orbit_style(color, intensity, speed)
+
+
+## 流光样式：折线流动 + 充能环 + 星屑（原始风格增强版）
+func _draw_threat_flow_style(color: Color, intensity: float, speed: float) -> void:
 	for i in range(_threat_cache_paths.size()):
-		var phase := _fx_time * 0.55 + float(i) * 0.5
-		_draw_flow_line_cached(_threat_cache_paths[i], _threat_cache_cums[i], color, phase, _stone_radius())
-	# 充能环：每颗棋子外围旋转的双段弧 + 柔和呼吸，表现「正在蓄力」
+		var phase := _fx_time * 0.55 * speed + float(i) * 0.5
+		_draw_flow_line_cached(_threat_cache_paths[i], _threat_cache_cums[i], color, phase, _stone_radius() * intensity)
+	# 充能环：每颗棋子外围旋转的双段弧
 	for c in _threat_cells:
 		var center := _cell_to_screen(c)
-		var ring_r := _stone_radius() + 5.5
-		var spin := _fx_time * 2.2 + float(c.x + c.y) * 0.7
-		draw_arc(center, ring_r, spin, spin + 1.1, 12, Color(color, 0.5), 2.0, true)
-		draw_arc(center, ring_r, spin + PI, spin + PI + 1.1, 12, Color(color, 0.5), 2.0, true)
-		var glow := 0.5 + 0.5 * sin(_fx_time * 2.6 + float(c.x) * 1.3 + float(c.y))
-		draw_circle(center, _stone_radius() + 9.0 + glow * 2.0, Color(color, 0.05 + 0.05 * glow))
-	# 星屑：棋子间随机升起的微光粒（无状态）
+		var ring_r := (_stone_radius() + 5.5) * intensity
+		var spin := _fx_time * 2.2 * speed + float(c.x + c.y) * 0.7
+		draw_arc(center, ring_r, spin, spin + 1.1, 12, Color(color, 0.5 * intensity), 2.0, true)
+		draw_arc(center, ring_r, spin + PI, spin + PI + 1.1, 12, Color(color, 0.5 * intensity), 2.0, true)
+		var glow := 0.5 + 0.5 * sin(_fx_time * 2.6 * speed + float(c.x) * 1.3 + float(c.y))
+		draw_circle(center, (_stone_radius() + 9.0 + glow * 2.0) * intensity, Color(color, (0.05 + 0.05 * glow) * intensity))
+	# 星屑
+	if _fx_particles_enabled:
+		for c in _threat_cells:
+			var base := _cell_to_screen(c)
+			for k in range(int(2 * intensity)):
+				var h := _hash01(int(c.x) * 73856093 + int(c.y) * 19349663 + k * 83492791)
+				var p := fposmod(_fx_time * (0.35 + h * 0.3) * speed + h, 1.0)
+				var drift := sin(h * 40.0 + p * 5.0) * 9.0 * (1.0 - p)
+				var pos := base + Vector2(drift + (h - 0.5) * 16.0, -p * 26.0 - 6.0)
+				var a := sin(p * PI) * 0.55 * intensity
+				draw_circle(pos, (1.5 + h * 1.2) * intensity, Color(color.lerp(Color.WHITE, 0.4), a))
+
+
+## 脉冲样式：扩散光环 + 中心闪烁
+func _draw_threat_pulse_style(color: Color, intensity: float, speed: float) -> void:
+	var pulse_speed := _fx_time * 3.0 * speed
 	for c in _threat_cells:
-		var base := _cell_to_screen(c)
-		for k in range(2):
-			var h := _hash01(int(c.x) * 73856093 + int(c.y) * 19349663 + k * 83492791)
-			var p := fposmod(_fx_time * (0.35 + h * 0.3) + h, 1.0)
-			var drift := sin(h * 40.0 + p * 5.0) * 9.0 * (1.0 - p)
-			var pos := base + Vector2(drift + (h - 0.5) * 16.0, -p * 26.0 - 6.0)
-			var a := sin(p * PI) * 0.55
-			draw_circle(pos, 1.5 + h * 1.2, Color(color.lerp(Color.WHITE, 0.4), a))
+		var center := _cell_to_screen(c)
+		var base_r := _stone_radius() * intensity
+		# 多层扩散光环
+		for ring in range(3):
+			var phase := fposmod(pulse_speed - float(ring) * 0.33, 1.0)
+			var ring_r := base_r * (1.2 + phase * 0.8)
+			var alpha := (1.0 - phase) * 0.4 * intensity
+			draw_arc(center, ring_r, 0, TAU, 32, Color(color, alpha), 2.5, true)
+		# 中心脉动光点
+		var core_pulse := 0.5 + 0.5 * sin(pulse_speed * 4.0)
+		draw_circle(center, base_r * (0.3 + 0.15 * core_pulse), Color(color.lerp(Color.WHITE, 0.6), 0.8 * intensity))
+	# 连接线
+	for i in range(_threat_cache_paths.size()):
+		var pts: Array = _threat_cache_paths[i]
+		for j in range(pts.size() - 1):
+			var t := 0.5 + 0.5 * sin(_fx_time * 5.0 * speed + float(j))
+			draw_line(pts[j], pts[j + 1], Color(color, 0.3 * t * intensity), 3.0, true)
+
+
+## 星轨样式：旋转星轨 + 光点环绕
+func _draw_threat_orbit_style(color: Color, intensity: float, speed: float) -> void:
+	var orbit_speed := _fx_time * 1.5 * speed
+	for c in _threat_cells:
+		var center := _cell_to_screen(c)
+		var base_r := _stone_radius() * intensity
+		# 多层旋转星轨
+		for orbit in range(2):
+			var orbit_r := base_r * (1.3 + float(orbit) * 0.5)
+			var orbit_offset := float(orbit) * PI * 0.5
+			# 轨道上的光点
+			var num_dots := 6 + orbit * 2
+			for d in range(num_dots):
+				var ang := orbit_speed + orbit_offset + float(d) * TAU / float(num_dots)
+				var dot_pos := center + Vector2(cos(ang), sin(ang)) * orbit_r
+				var dot_size := (2.0 + sin(orbit_speed * 3.0 + float(d)) * 1.0) * intensity
+				var alpha := 0.6 + 0.4 * sin(orbit_speed * 2.0 + float(d) * 0.5)
+				draw_circle(dot_pos, dot_size, Color(color.lerp(Color.WHITE, 0.3), alpha * intensity))
+			# 轨道线
+			draw_arc(center, orbit_r, 0, TAU, 48, Color(color, 0.15 * intensity), 1.5, true)
+	# 中心星芒
+	for c in _threat_cells:
+		var center := _cell_to_screen(c)
+		var rays := 8
+		for r in range(rays):
+			var ang := float(r) * TAU / float(rays) + orbit_speed * 0.3
+			var ray_len := _stone_radius() * (0.5 + 0.3 * sin(orbit_speed * 2.0 + float(r)))
+			var ray_end := center + Vector2(cos(ang), sin(ang)) * ray_len * intensity
+			draw_line(center, ray_end, Color(color, 0.4 * intensity), 2.0, true)
 
 
 ## 把棋型格子按所在直线分组、沿方向排序成世界坐标折线。
