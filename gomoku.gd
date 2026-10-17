@@ -90,6 +90,7 @@ var stop_button: Button
 var rule_button: Button
 var board_size_button: Button
 var _analysis_panel: VBoxContainer       # 分析面板（每指标一行，悬停有说明）
+var _analysis_section_label: Label = null # 「实时分析」分区标题（PVP 下隐藏）
 var _analysis_waiting: Label              # 「等待引擎响应…」占位
 var _analysis_vals: Dictionary = {}       # 指标名 -> 值 Label
 var _analysis_routes: Array = []          # 路线行（值 Label 数组，最多 5 条）
@@ -774,6 +775,10 @@ func _make_small_button(text: String) -> Button:
 ## 从标题界面进入对局。
 func _start_game(mode: int) -> void:
 	game_mode = mode
+	# 防御：若已有对局 UI（非常规路径重复进入），先释放再重建，避免双层叠加
+	if _game_ui_layer != null:
+		_game_ui_layer.queue_free()
+		_game_ui_layer = null
 	# 离开标题界面时立即收起彩蛋提示，避免（如解锁提示）跟随进入对局
 	if _toast_label != null:
 		_toast_label.modulate.a = 0.0
@@ -1026,10 +1031,15 @@ func _build_ui() -> void:
 	panel_style.content_margin_bottom = 18
 	panel.add_theme_stylebox_override("panel", panel_style)
 
-	# 按钮较多，用 ScrollContainer 包裹避免溢出裁切
+	# 面板分两层：上层滚动区（对局/分析），下层固定操作区——悔棋/新局是高频按钮，不该被滚动折叠
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 8)
+	panel.add_child(outer)
+
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.add_child(scroll)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(scroll)
 
 	var layout := VBoxContainer.new()
 	layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1102,7 +1112,8 @@ func _build_ui() -> void:
 	layout.add_child(settings_btn)
 
 	# ── 实时分析（每指标一行，悬停查看含义）──
-	layout.add_child(_section_label("实时分析"))
+	_analysis_section_label = _section_label("实时分析")
+	layout.add_child(_analysis_section_label)
 	_analysis_panel = VBoxContainer.new()
 	_analysis_panel.add_theme_constant_override("separation", 2)
 	_analysis_panel.custom_minimum_size = Vector2(0, 70)
@@ -1159,15 +1170,14 @@ func _build_ui() -> void:
 		_analysis_panel.add_child(rrow)
 		_analysis_routes.append(rval)
 
-	# ── 操作（分隔线 + 按钮行，置底）──
+	# ── 操作（固定在面板底部，不随滚动折叠，随时可达）──
 	var divider := ColorRect.new()
 	divider.color = Color(0.30, 0.40, 0.60, 0.4)
 	divider.custom_minimum_size = Vector2(0, 1)
-	layout.add_child(divider)
-	layout.add_child(_section_label("操作"))
+	outer.add_child(divider)
 	var action_row := HBoxContainer.new()
 	action_row.add_theme_constant_override("separation", 8)
-	layout.add_child(action_row)
+	outer.add_child(action_row)
 
 	undo_button = _make_button()
 	undo_button.text = "悔棋"
@@ -1188,13 +1198,14 @@ func _build_ui() -> void:
 	_style_primary_button(restart_button)
 	action_row.add_child(restart_button)
 
-	# 操作提示（置底，弱化）
+	# 操作提示（固定区底部，弱化）
 	info_label = Label.new()
-	info_label.text = "左键：落子\nR：重新开始\nCtrl+C / Ctrl+V：复制局面"
+	info_label.text = "左键：落子　R：新局　Ctrl+C/V：复制/粘贴局面"
+	info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	info_label.add_theme_font_size_override("font_size", 12)
+	info_label.add_theme_font_size_override("font_size", 11)
 	info_label.add_theme_color_override("font_color", Color("9db4d8"))
-	layout.add_child(info_label)
+	outer.add_child(info_label)
 
 	_refresh_buttons()
 
@@ -1604,6 +1615,12 @@ func _refresh_buttons() -> void:
 		_ai_section_label.visible = show_ai_side
 	if _ai_section_row:
 		_ai_section_row.visible = show_ai_side
+	# 双人对战没有引擎运行，隐藏整个实时分析区（避免常驻空占位噪音）
+	var show_analysis := game_mode != GameMode.PVP
+	if _analysis_section_label:
+		_analysis_section_label.visible = show_analysis
+	if _analysis_panel:
+		_analysis_panel.visible = show_analysis
 	# 特效设置按钮
 	if _threat_style_button:
 		_threat_style_button.text = "棋型高亮：%s" % _threat_style_name()
@@ -3012,10 +3029,11 @@ func _trigger_win_fx() -> void:
 	_win_flash = _fx_time
 	_shake_start = _fx_time
 	_spawn_confetti()
-	_spawn_win_sparks()
+	if _win_anim_style != 2:
+		_spawn_win_sparks()  # 光环扩散样式不用火花，保持纯粹
 	if _win_player:
 		_win_player.play()
-	# 演出分两幕：光束/射线/火花先播 ~0.55s，横幅随后入场（不遮挡高光段）
+	# 演出分两幕：特效先播 ~0.55s，横幅随后入场（不遮挡高光段）
 	var delay := 0.55 / _fx_speed  # 动画速度影响演出节奏
 	await get_tree().create_timer(delay).timeout
 	if winner != 0 and _in_game:
@@ -3029,11 +3047,15 @@ func _spawn_win_sparks() -> void:
 		return
 	var colors := [ACCENT_GOLD, Color("fff3c4"), ACCENT_CYAN, Color("ffb86b")]
 	var spark_count := int(16 * _fx_intensity)  # 特效强度控制火花数量
+	var speed_mul := 1.0
+	if _win_anim_style == 1:
+		spark_count = int(spark_count * 2.2)  # 粒子爆发样式：更密集更猛的火花
+		speed_mul = 1.5
 	for c in winning_cells:
 		var center := _cell_to_screen(c)
 		for i in range(spark_count):
 			var ang := randf_range(0.0, TAU)
-			var speed := randf_range(70.0, 260.0) * _fx_speed
+			var speed := randf_range(70.0, 260.0) * _fx_speed * speed_mul
 			_win_sparks.append({
 				"pos": center + Vector2(randf_range(-8, 8), randf_range(-8, 8)),
 				"vel": Vector2(cos(ang), sin(ang) * 0.75) * speed,
@@ -3571,9 +3593,10 @@ func _draw_board() -> void:
 			var letter := char(65 + i)
 			var top_pos := _board_origin() + Vector2(i * cs, -30)
 			draw_string(font, top_pos, letter, HORIZONTAL_ALIGNMENT_CENTER, -1, 12, coord_color)
-			# 纵向数字（1~）
+			# 纵向数字（1~）：小窗口下棋盘贴左（原点最小 24px），固定 -34 会把数字画到屏幕外，按可用空间收缩
 			var num := str(i + 1)
-			var left_pos := _board_origin() + Vector2(-34, i * cs + 4)
+			var left_offset := minf(30.0, _board_origin().x - 4.0)
+			var left_pos := _board_origin() + Vector2(-left_offset, i * cs + 4)
 			draw_string(font, left_pos, num, HORIZONTAL_ALIGNMENT_CENTER, -1, 12, coord_color)
 
 
@@ -3650,12 +3673,73 @@ func _draw_hover() -> void:
 	draw_arc(center, _stone_radius(), 0.0, TAU, 48, Color(ACCENT_CYAN, 0.65), 1.8, true)
 
 
-## 绘制胜利彩带（旋转的小色块下落）。
-## 必胜连珠特效：金色能量束渐进贯穿五子 + 波前逐子白闪 + 震中双冲击波环。
+## 必胜连珠特效入口：按「获胜动画样式」分发（经典光束 / 粒子爆发 / 光环扩散）。
 ## 减弱动效模式下整体跳过（无障碍：保留信息性辉光，去除强刺激层）。
 func _draw_win_beam() -> void:
 	if winner == 0 or winning_cells.size() < 5 or _reduced_fx:
 		return
+	match _win_anim_style:
+		1:
+			_draw_win_burst()
+		2:
+			_draw_win_halo()
+		_:
+			_draw_win_beam_classic()
+
+
+## 样式1 · 粒子爆发：中心冲击闪光 + 每颗制胜子放射光刃 + 持续金光（火花由 _spawn_win_sparks 加倍）。
+func _draw_win_burst() -> void:
+	if _win_flash < 0.0:
+		return
+	var age := _fx_time - _win_flash
+	var pts: Array[Vector2] = []
+	for c in winning_cells:
+		pts.append(_cell_to_screen(c))
+	var cs := _cell_size()
+	var center := pts[0].lerp(pts[pts.size() - 1], 0.5)
+	# 中心冲击闪光（前 0.5s 快速扩张消退）
+	if age < 0.5:
+		var k := age / 0.5
+		draw_circle(center, cs * (1.0 + k * 4.0) * _fx_intensity, Color(1.0, 0.97, 0.85, (1.0 - k) * 0.35 * minf(_fx_intensity, 1.5)))
+	# 每颗制胜子放射状光刃（0.9s 内伸展并消退）
+	if age < 0.9:
+		var fade := 1.0 - age / 0.9
+		for i in pts.size():
+			for b in range(8):
+				var ang := float(b) * TAU / 8.0 + float(i) * 0.35
+				var dir := Vector2(cos(ang), sin(ang))
+				var len := cs * (1.2 + 1.8 * fade) * _fx_intensity
+				draw_line(pts[i] + dir * cs * 0.3, pts[i] + dir * len, Color(ACCENT_GOLD, 0.5 * fade), 2.5 * fade + 0.8, true)
+	# 制胜子持续呼吸金光（横幅期间保持）
+	for p in pts:
+		var glow := 0.5 + 0.5 * sin(_fx_time * 3.0 * _fx_speed)
+		draw_circle(p, _stone_radius() * (1.2 + 0.15 * glow), Color(ACCENT_GOLD, 0.18 * minf(_fx_intensity, 1.5)))
+
+
+## 样式2 · 光环扩散：每颗制胜子错峰三环涟漪（循环）+ 中心大光环呼吸。
+func _draw_win_halo() -> void:
+	if _win_flash < 0.0:
+		return
+	var pts: Array[Vector2] = []
+	for c in winning_cells:
+		pts.append(_cell_to_screen(c))
+	var cs := _cell_size()
+	var center := pts[0].lerp(pts[pts.size() - 1], 0.5)
+	# 每颗制胜子：错峰扩散三环（循环涟漪）
+	for i in pts.size():
+		for ring in range(3):
+			var phase := fposmod((_fx_time - _win_flash) * 0.55 * _fx_speed - float(ring) * 0.33 - float(i) * 0.09, 1.0)
+			var r := cs * (0.6 + phase * 2.2) * _fx_intensity
+			var a := (1.0 - phase) * 0.38 * minf(_fx_intensity, 1.5)
+			draw_arc(pts[i], r, 0.0, TAU, 40, Color(ACCENT_GOLD, a), 2.2, true)
+	# 中心大光环呼吸 + 核心亮点
+	var breath := 0.5 + 0.5 * sin(_fx_time * 1.8 * _fx_speed)
+	draw_arc(center, cs * 3.2 * (0.95 + 0.1 * breath) * _fx_intensity, 0.0, TAU, 72, Color(ACCENT_GOLD, 0.22 * minf(_fx_intensity, 1.5)), 3.0, true)
+	draw_circle(center, cs * 0.12, Color(1.0, 0.97, 0.85, 0.5))
+
+
+## 样式0 · 经典：金色能量束渐进贯穿五子 + 波前逐子白闪 + 震中双冲击波环 + 神光射线 + 法阵。
+func _draw_win_beam_classic() -> void:
 	var t := clampf(_win_anim, 0.0, 1.0)
 	var pts: Array[Vector2] = []
 	for c in winning_cells:
